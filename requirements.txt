@@ -1,0 +1,5 @@
+# Core dependencies
+# We'll add packages here as we need them
+
+# Development dependencies
+# (later we'll split these into requirements-dev.txt)
