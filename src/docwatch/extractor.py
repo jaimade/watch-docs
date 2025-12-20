@@ -121,6 +121,19 @@ def extract_doc_file(filepath: Path) -> Optional[DocFile]:
             reference_type=ReferenceType.INLINE_CODE,
         ))
 
+    # Add code block identifiers (weaker form of documentation)
+    if doc_format == DocFormat.MARKDOWN:
+        code_block_ids = markdown_extractor.extract_code_block_identifiers(content)
+        for ref_text in code_block_ids:
+            # Skip if already captured as inline code
+            if ref_text not in inline_refs:
+                line_num = _find_reference_line(content, ref_text)
+                references.append(DocReference(
+                    text=ref_text,
+                    location=Location(file=filepath, line_start=line_num or 1),
+                    reference_type=ReferenceType.CODE_BLOCK,
+                ))
+
     # Determine title from first header
     title = headers[0]["text"] if headers else None
 

@@ -116,6 +116,15 @@ class Location:
             "line_end": self.line_end,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Location":
+        """Reconstruct from dictionary."""
+        return cls(
+            file=Path(data["file"]),
+            line_start=data["line_start"],
+            line_end=data.get("line_end"),
+        )
+
 
 @dataclass(frozen=True)
 class CodeEntity:
@@ -170,6 +179,18 @@ class CodeEntity:
             "qualified_name": self.qualified_name,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "CodeEntity":
+        """Reconstruct from dictionary."""
+        return cls(
+            name=data["name"],
+            entity_type=EntityType(data["type"]),
+            location=Location.from_dict(data["location"]),
+            signature=data.get("signature"),
+            docstring=data.get("docstring"),
+            parent=data.get("parent"),
+        )
+
 
 @dataclass(frozen=True)
 class DocReference:
@@ -197,6 +218,16 @@ class DocReference:
             "context": self.context,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "DocReference":
+        """Reconstruct from dictionary."""
+        return cls(
+            text=data["text"],
+            location=Location.from_dict(data["location"]),
+            reference_type=ReferenceType(data["type"]),
+            context=data.get("context"),
+        )
+
 
 @dataclass(frozen=True)
 class CodeDocLink:
@@ -217,6 +248,16 @@ class CodeDocLink:
             "link_type": self.link_type.value,
             "confidence": self.confidence,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CodeDocLink":
+        """Reconstruct from dictionary."""
+        return cls(
+            entity=CodeEntity.from_dict(data["entity"]),
+            reference=DocReference.from_dict(data["reference"]),
+            link_type=LinkType(data["link_type"]),
+            confidence=data["confidence"],
+        )
 
 
 @dataclass
@@ -261,6 +302,16 @@ class CodeFile:
             "imports": self.imports,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "CodeFile":
+        """Reconstruct from dictionary."""
+        return cls(
+            path=Path(data["path"]),
+            language=Language(data["language"]),
+            entities=[CodeEntity.from_dict(e) for e in data.get("entities", [])],
+            imports=data.get("imports", []),
+        )
+
 
 @dataclass
 class DocFile:
@@ -288,3 +339,14 @@ class DocFile:
             "references": [r.to_dict() for r in self.references],
             "headers": self.headers,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DocFile":
+        """Reconstruct from dictionary."""
+        return cls(
+            path=Path(data["path"]),
+            format=DocFormat(data["format"]),
+            title=data.get("title"),
+            references=[DocReference.from_dict(r) for r in data.get("references", [])],
+            headers=data.get("headers", []),
+        )

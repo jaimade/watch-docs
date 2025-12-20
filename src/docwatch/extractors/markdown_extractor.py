@@ -137,6 +137,77 @@ def extract_inline_code(content):
     return unique
 
 
+def extract_code_block_identifiers(content):
+    """
+    Extract likely code identifiers from fenced code blocks.
+
+    Parses import statements, function calls, and class references
+    from Python/JS code blocks. These represent "weak" documentation
+    (examples rather than explanatory prose).
+
+    Args:
+        content: Markdown content as a string
+
+    Returns:
+        list: Unique identifier strings found in code blocks
+    """
+    identifiers = set()
+
+    # Get all code blocks
+    blocks = extract_code_blocks(content)
+
+    for block in blocks:
+        code = block['code']
+        lang = block['language'].lower()
+
+        # Python imports: from x import y, z  OR  import x
+        if lang in ('python', 'py', ''):
+            # from module import name1, name2
+            from_imports = re.findall(
+                r'from\s+[\w.]+\s+import\s+([^#\n]+)',
+                code
+            )
+            for match in from_imports:
+                # Split by comma and clean up
+                names = re.findall(r'(\w+)', match)
+                identifiers.update(names)
+
+            # import module  (get the module name)
+            direct_imports = re.findall(r'^import\s+([\w.]+)', code, re.MULTILINE)
+            for match in direct_imports:
+                # Get the last part of dotted import
+                identifiers.add(match.split('.')[-1])
+
+            # Function/method calls: name(  or name.method(
+            calls = re.findall(r'\b([A-Za-z_]\w*)\s*\(', code)
+            # Filter out common Python builtins/keywords
+            builtins = {'print', 'len', 'str', 'int', 'list', 'dict', 'set',
+                       'range', 'open', 'type', 'isinstance', 'if', 'for', 'while'}
+            identifiers.update(c for c in calls if c not in builtins)
+
+            # Class instantiation / type hints: ClassName or name: ClassName
+            classes = re.findall(r'\b([A-Z][A-Za-z0-9_]*)\b', code)
+            # Filter out common ones
+            common = {'True', 'False', 'None', 'Path', 'Optional', 'List', 'Dict', 'Set'}
+            identifiers.update(c for c in classes if c not in common)
+
+        # JavaScript/TypeScript
+        elif lang in ('javascript', 'js', 'typescript', 'ts'):
+            # import { name } from 'module'
+            js_imports = re.findall(r'import\s*\{([^}]+)\}', code)
+            for match in js_imports:
+                names = re.findall(r'(\w+)', match)
+                identifiers.update(names)
+
+            # Function calls
+            calls = re.findall(r'\b([A-Za-z_]\w*)\s*\(', code)
+            builtins = {'console', 'log', 'require', 'async', 'await', 'function'}
+            identifiers.update(c for c in calls if c not in builtins)
+
+    # Filter out very short identifiers (likely false positives)
+    return [i for i in identifiers if len(i) >= 3]
+
+
 def extract_links(content):
     """
     Extract markdown links [text](url).

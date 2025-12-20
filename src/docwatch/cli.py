@@ -12,6 +12,7 @@ from rich.text import Text
 
 from docwatch.scanner import categorize_files, get_directory_stats
 from docwatch.extractor import process_directory
+from docwatch.analyzer import DocumentationAnalyzer
 
 # Create a console instance for all output
 console = Console()
@@ -88,6 +89,7 @@ def print_stats(stats):
 
 def print_extraction_results(code_files, doc_files, base_dir):
     """Print detailed extraction analysis."""
+    from docwatch.models import EntityType
 
     # Code Analysis
     console.print("\n[bold cyan]Code Analysis:[/]")
@@ -95,13 +97,17 @@ def print_extraction_results(code_files, doc_files, base_dir):
         rel_path = cf.path.relative_to(base_dir) if cf.path.is_relative_to(base_dir) else cf.path
         console.print(f"  [cyan]{rel_path}[/]")
 
-        funcs = cf.functions[:10]
-        func_str = ", ".join(funcs) if funcs else "none"
-        if len(cf.functions) > 10:
-            func_str += f" [dim](+{len(cf.functions) - 10} more)[/]"
+        # Get function names from entities
+        func_names = [e.name for e in cf.entities if e.entity_type == EntityType.FUNCTION][:10]
+        func_str = ", ".join(func_names) if func_names else "none"
+        total_funcs = len([e for e in cf.entities if e.entity_type == EntityType.FUNCTION])
+        if total_funcs > 10:
+            func_str += f" [dim](+{total_funcs - 10} more)[/]"
         console.print(f"    Functions: [white]{func_str}[/]")
 
-        class_str = ", ".join(cf.classes) if cf.classes else "none"
+        # Get class names from entities
+        class_names = [e.name for e in cf.entities if e.entity_type == EntityType.CLASS]
+        class_str = ", ".join(class_names) if class_names else "none"
         console.print(f"    Classes: [white]{class_str}[/]")
 
     # Documentation Analysis
@@ -116,39 +122,147 @@ def print_extraction_results(code_files, doc_files, base_dir):
             header_str += f" [dim](+{len(df.headers) - 5} more)[/]"
         console.print(f"    Headers: [white]{header_str}[/]")
 
-        # Filter code references to likely identifiers (no special chars, reasonable length)
-        refs = [r for r in df.code_references
-                if r.replace('_', '').isalnum() and 2 < len(r) < 50][:10]
-        ref_str = ", ".join(refs) if refs else "none"
-        if len(refs) < len(df.code_references):
-            remaining = len([r for r in df.code_references
-                           if r.replace('_', '').isalnum() and 2 < len(r) < 50]) - 10
-            if remaining > 0:
-                ref_str += f" [dim](+{remaining} more)[/]"
+        # Get code references from references list
+        code_refs = [r.clean_text for r in df.references]
+        # Filter to likely identifiers (no special chars, reasonable length)
+        filtered_refs = [r for r in code_refs
+                        if r.replace('_', '').isalnum() and 2 < len(r) < 50][:10]
+        ref_str = ", ".join(filtered_refs) if filtered_refs else "none"
+        total_valid = len([r for r in code_refs
+                         if r.replace('_', '').isalnum() and 2 < len(r) < 50])
+        if total_valid > 10:
+            ref_str += f" [dim](+{total_valid - 10} more)[/]"
         console.print(f"    Code references: [white]{ref_str}[/]")
 
     # Potential links summary
     console.print("\n[bold yellow]Potential Links Found:[/]")
 
     # Collect all code symbols
-    all_functions = set()
-    all_classes = set()
+    all_symbols = set()
     for cf in code_files:
-        all_functions.update(cf.functions)
-        all_classes.update(cf.classes)
-    all_symbols = all_functions | all_classes
+        all_symbols.update(e.name for e in cf.entities)
 
     # Find which docs reference which symbols
     for df in sorted(doc_files, key=lambda x: x.path):
         rel_path = df.path.relative_to(base_dir) if df.path.is_relative_to(base_dir) else df.path
 
         # Find matching references
-        matches = [r for r in df.code_references if r in all_symbols]
+        matches = [r.clean_text for r in df.references if r.clean_text in all_symbols]
 
         if matches:
             console.print(f"  [green]{rel_path}[/] references: [white]{', '.join(matches[:10])}[/]")
             if len(matches) > 10:
                 console.print(f"    [dim](+{len(matches) - 10} more)[/]")
+
+
+def make_progress_bar(percentage: float, width: int = 10) -> str:
+    """Create a text-based progress bar."""
+    filled = int(percentage / 100 * width)
+    empty = width - filled
+    return "█" * filled + "░" * empty
+
+
+def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> None:
+    """Print a comprehensive documentation health report."""
+    stats = analyzer.get_coverage_stats()
+    coverage_by_file = analyzer.get_coverage_by_file()
+    priority_issues = analyzer.get_priority_issues()
+
+    # Header
+    console.print()
+    console.print(Panel(
+        "[bold]Documentation Health Report[/]",
+        style="blue",
+        expand=False
+    ))
+
+    # Overall coverage
+    coverage_pct = stats.coverage_percent
+    if coverage_pct >= 80:
+        coverage_style = "green"
+    elif coverage_pct >= 50:
+        coverage_style = "yellow"
+    else:
+        coverage_style = "red"
+
+    console.print()
+    console.print(
+        f"[bold]Coverage:[/] [{coverage_style}]{coverage_pct:.0f}%[/] "
+        f"({stats.documented_entities} of {stats.total_entities} code entities documented)"
+    )
+
+    # By file table
+    if coverage_by_file:
+        console.print("\n[bold]By File:[/]")
+
+        # Sort by coverage (lowest first to highlight problem areas)
+        sorted_files = sorted(coverage_by_file.items(), key=lambda x: x[1])
+
+        for filepath, pct in sorted_files[:10]:
+            # Make path relative if possible
+            try:
+                rel_path = Path(filepath).relative_to(base_dir)
+            except ValueError:
+                rel_path = Path(filepath)
+
+            bar = make_progress_bar(pct)
+
+            if pct >= 80:
+                style = "green"
+            elif pct >= 50:
+                style = "yellow"
+            else:
+                style = "red"
+
+            console.print(f"  {str(rel_path):<30} [{style}]{pct:>3.0f}%[/] {bar}")
+
+        if len(coverage_by_file) > 10:
+            console.print(f"  [dim]... and {len(coverage_by_file) - 10} more files[/]")
+
+    # Issues summary
+    high_issues = [i for i in priority_issues if i["priority"] >= 0.7]
+    medium_issues = [i for i in priority_issues if 0.4 <= i["priority"] < 0.7]
+    low_issues = [i for i in priority_issues if i["priority"] < 0.4]
+
+    # Count by type
+    undocumented_high = len([i for i in high_issues if i["type"] == "undocumented"])
+    broken_refs = len([i for i in priority_issues if i["type"] == "broken_reference"])
+    undocumented_low = len([i for i in low_issues if i["type"] == "undocumented"])
+
+    console.print("\n[bold]Issues Found:[/]")
+    if undocumented_high > 0:
+        console.print(f"  [red]HIGH:[/] {undocumented_high} public entities have no documentation")
+    if broken_refs > 0:
+        console.print(f"  [yellow]MEDIUM:[/] {broken_refs} documentation references point to non-existent code")
+    if undocumented_low > 0:
+        console.print(f"  [dim]LOW:[/] {undocumented_low} internal/private entities are undocumented")
+
+    if not priority_issues:
+        console.print("  [green]✓ No issues found![/]")
+
+    # Top priority items
+    if priority_issues:
+        console.print("\n[bold]Top Priority:[/]")
+        for i, issue in enumerate(priority_issues[:5], 1):
+            if issue["type"] == "undocumented":
+                entity = issue["entity"]
+                location = entity["location"]
+                try:
+                    rel_path = Path(location["file"]).relative_to(base_dir)
+                except ValueError:
+                    rel_path = Path(location["file"])
+                console.print(f"  {i}. Document: [cyan]{rel_path}[/]::[white]{entity['name']}[/]")
+            else:
+                ref = issue["reference"]
+                location = ref["location"]
+                try:
+                    rel_path = Path(location["file"]).relative_to(base_dir)
+                except ValueError:
+                    rel_path = Path(location["file"])
+                console.print(
+                    f"  {i}. Fix broken reference in [green]{rel_path}[/] "
+                    f"line {location['line_start']}: [yellow]`{ref['clean_text']}`[/]"
+                )
 
 
 def save_results(results, stats, output_path):
@@ -206,6 +320,11 @@ def main():
         action="store_true",
         help="Extract and display code/documentation analysis"
     )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Run full documentation analysis and show health report"
+    )
 
     args = parser.parse_args()
 
@@ -237,8 +356,21 @@ def main():
         code_files, doc_files = process_directory(args.directory, ignore_dirs=ignore_dirs)
         print_extraction_results(code_files, doc_files, args.directory)
 
+    # Run full analysis
+    analyzer = None
+    if args.analyze:
+        analyzer = DocumentationAnalyzer()
+        analyzer.analyze_directory(args.directory, ignore_dirs=ignore_dirs)
+        print_analysis_report(analyzer, args.directory)
+
+    # Save output
     if args.output:
-        save_results(results, stats, args.output)
+        if analyzer:
+            # Save full analysis
+            analyzer.save(args.output)
+            console.print(f"\n[bold green]✓[/] Graph saved to: [underline]{args.output}[/]")
+        else:
+            save_results(results, stats, args.output)
 
     return 0
 

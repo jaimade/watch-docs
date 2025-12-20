@@ -7,13 +7,15 @@ This module handles:
 - Computing coverage statistics
 - Finding documentation issues
 """
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from docwatch.models import (
     CodeFile, DocFile, CodeEntity, DocReference,
-    CodeDocLink, LinkType
+    CodeDocLink, LinkType, ReferenceType
 )
 from docwatch.graph import DocumentationGraph
 from docwatch.extractor import process_directory
@@ -128,14 +130,20 @@ class DocumentationAnalyzer:
         Find code entities matching a reference.
 
         Returns list of (entity, link_type, confidence) tuples.
+        Code block references get a confidence penalty (0.6x) since
+        they represent weaker documentation than inline prose.
         """
         clean_text = ref.clean_text
         matches = []
 
+        # Code block references are weaker documentation
+        confidence_multiplier = 0.6 if ref.reference_type == ReferenceType.CODE_BLOCK else 1.0
+
         # Exact name match
         if clean_text in self._entity_index:
             for entity in self._entity_index[clean_text]:
-                matches.append((entity, LinkType.EXACT, 1.0))
+                confidence = 1.0 * confidence_multiplier
+                matches.append((entity, LinkType.EXACT, confidence))
             return matches  # Exact match found, no need for fuzzy
 
         # Qualified match (e.g., "module.func" matches "func")
@@ -145,16 +153,19 @@ class DocumentationAnalyzer:
                 for entity in self._entity_index[last_part]:
                     # Higher confidence if qualified name contains reference
                     if clean_text in entity.qualified_name:
-                        matches.append((entity, LinkType.QUALIFIED, 0.9))
+                        confidence = 0.9 * confidence_multiplier
+                        matches.append((entity, LinkType.QUALIFIED, confidence))
                     else:
-                        matches.append((entity, LinkType.PARTIAL, 0.7))
+                        confidence = 0.7 * confidence_multiplier
+                        matches.append((entity, LinkType.PARTIAL, confidence))
 
         # Partial match (substring)
         if not matches:
             for name, entities in self._entity_index.items():
                 if len(clean_text) >= 3 and (clean_text in name or name in clean_text):
                     for entity in entities:
-                        matches.append((entity, LinkType.PARTIAL, 0.5))
+                        confidence = 0.5 * confidence_multiplier
+                        matches.append((entity, LinkType.PARTIAL, confidence))
 
         return matches
 
@@ -440,3 +451,70 @@ class DocumentationAnalyzer:
             "undocumented": [e.to_dict() for e in self.get_undocumented_entities()],
             "broken_references": [r.to_dict() for r in self.get_broken_references()],
         }
+
+    def save(self, filepath: Path) -> None:
+        """
+        Save the analysis to a JSON file.
+
+        Args:
+            filepath: Path to save the JSON file
+        """
+        data = {
+            "version": "1.0",
+            "created_at": datetime.now().isoformat(),
+            "code_files": [cf.to_dict() for cf in self.code_files],
+            "doc_files": [df.to_dict() for df in self.doc_files],
+            "links": [link.to_dict() for link in self.links],
+        }
+
+        filepath = Path(filepath)
+        with filepath.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    @classmethod
+    def load(cls, filepath: Path) -> "DocumentationAnalyzer":
+        """
+        Load an analysis from a JSON file.
+
+        Args:
+            filepath: Path to the JSON file
+
+        Returns:
+            DocumentationAnalyzer with restored state
+        """
+        filepath = Path(filepath)
+        with filepath.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        analyzer = cls()
+
+        # Reconstruct code files
+        analyzer.code_files = [
+            CodeFile.from_dict(cf) for cf in data.get("code_files", [])
+        ]
+
+        # Reconstruct doc files
+        analyzer.doc_files = [
+            DocFile.from_dict(df) for df in data.get("doc_files", [])
+        ]
+
+        # Reconstruct links
+        analyzer.links = [
+            CodeDocLink.from_dict(link) for link in data.get("links", [])
+        ]
+
+        # Rebuild the graph and entity index
+        for code_file in analyzer.code_files:
+            analyzer.graph.add_code_file(code_file)
+            for entity in code_file.entities:
+                if entity.name not in analyzer._entity_index:
+                    analyzer._entity_index[entity.name] = []
+                analyzer._entity_index[entity.name].append(entity)
+
+        for doc_file in analyzer.doc_files:
+            analyzer.graph.add_doc_file(doc_file)
+
+        for link in analyzer.links:
+            analyzer.graph.add_link(link)
+
+        return analyzer
