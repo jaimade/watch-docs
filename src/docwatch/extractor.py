@@ -6,11 +6,8 @@ from pathlib import Path
 
 from docwatch.readers import read_file_safe
 from docwatch.scanner import categorize_files, CODE_EXTENSIONS, DOC_EXTENSIONS
-from docwatch.extractors.python_extractor import (
-    extract_function_names,
-    extract_class_names,
-    extract_imports,
-)
+from docwatch.extractors import python_extractor
+from docwatch.extractors import js_extractor
 from docwatch.extractors import markdown_extractor
 from docwatch.extractors import rst_extractor
 from docwatch.extractors import asciidoc_extractor
@@ -90,17 +87,25 @@ def extract_code_info(filepath: Path) -> CodeFile | None:
     ext = path.suffix.lower()
     language = EXTENSION_TO_LANGUAGE.get(ext, ext.lstrip('.'))
 
-    # Currently only Python has full extraction support
+    # Select the right extractor module based on language
     if language == 'python':
-        functions = extract_function_names(content)
-        classes = extract_class_names(content)
-        imports = extract_imports(content)
+        extractor = python_extractor
+    elif language in ('javascript', 'typescript'):
+        extractor = js_extractor
     else:
-        # For other languages, return empty lists for now
-        # TODO: Add extractors for other languages
-        functions = []
-        classes = []
-        imports = []
+        # For unsupported languages, return empty lists
+        return CodeFile(
+            path=path,
+            language=language,
+            functions=[],
+            classes=[],
+            imports=[],
+        )
+
+    # Extract using the selected module
+    functions = extractor.extract_function_names(content)
+    classes = extractor.extract_class_names(content)
+    imports = extractor.extract_imports(content)
 
     return CodeFile(
         path=path,
