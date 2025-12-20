@@ -5,16 +5,33 @@ from collections import Counter
 from pathlib import Path
 
 
+# Directories to ignore by default
+DEFAULT_IGNORE_DIRS = {
+    '.git', '.hg', '.svn',           # Version control
+    'node_modules', 'vendor',         # Dependencies
+    '__pycache__', '.pytest_cache',   # Python cache
+    'venv', '.venv', 'env', '.env',   # Virtual environments
+    '.idea', '.vscode',               # IDE configs
+    'dist', 'build', 'target',        # Build outputs
+    '.tox', '.nox',                   # Test runners
+    'egg-info', '.eggs',              # Python packaging
+}
+
 # Code file extensions
 CODE_EXTENSIONS = {
-    '.py', '.js', '.ts', '.tsx', '.jsx',
+    '.py', '.pyi',                    # Python + type stubs
+    '.js', '.ts', '.tsx', '.jsx',
+    '.mjs', '.cjs',                   # ES/CommonJS modules
     '.php', '.rb', '.java', '.c', '.cpp',
     '.h', '.hpp', '.cs', '.go', '.rs',
     '.swift', '.kt', '.scala', '.sh',
     '.bash', '.zsh', '.fish', '.sql',
-    '.html', '.css', '.scss', '.sass',
+    '.html', '.css', '.scss', '.sass', '.tcss',
     '.vue', '.svelte', '.lua', '.r',
-    '.m', '.mm', '.pl', '.pm'
+    '.m', '.mm', '.pl', '.pm',
+    '.asp', '.aspx', '.jsp',          # Server-side scripting
+    '.erb', '.ejs', '.twig',          # Template engines
+    '.xsl', '.xslt',                  # XSL transformations
 }
 
 # Documentation file extensions
@@ -28,12 +45,24 @@ DOC_EXTENSIONS = {
 }
 
 
-def get_all_files(directory):
+def should_ignore(path, ignore_dirs):
+    """Check if a path should be ignored based on directory names."""
+    for part in path.parts:
+        if part in ignore_dirs:
+            return True
+        # Also check for .egg-info suffix
+        if part.endswith('.egg-info'):
+            return True
+    return False
+
+
+def get_all_files(directory, ignore_dirs=None):
     """
     Get all files recursively from a directory.
 
     Args:
         directory: Path to directory (string or Path object)
+        ignore_dirs: Set of directory names to ignore (default: DEFAULT_IGNORE_DIRS)
 
     Returns:
         List of Path objects pointing to files
@@ -43,7 +72,9 @@ def get_all_files(directory):
         FileNotFoundError: If directory doesn't exist
         NotADirectoryError: If path points to a file, not a directory
     """
-    # Convert to Path object (automatically validates type)
+    if ignore_dirs is None:
+        ignore_dirs = DEFAULT_IGNORE_DIRS
+
     dir_path = Path(directory)
 
     if not dir_path.exists():
@@ -52,14 +83,16 @@ def get_all_files(directory):
     if not dir_path.is_dir():
         raise NotADirectoryError(f"Path is not a directory: {dir_path}")
 
-    # Collect files, handling permission errors
     files = []
     for item in dir_path.rglob('*'):
         try:
+            # Skip ignored directories
+            if should_ignore(item, ignore_dirs):
+                continue
+
             if item.is_file():
                 files.append(item)
         except PermissionError:
-            # Skip files/dirs we can't access
             print(f"Warning: Permission denied for {item}")
             continue
 
@@ -94,12 +127,13 @@ def is_doc_file(filepath):
     return path.suffix.lower() in DOC_EXTENSIONS
 
 
-def categorize_files(directory):
+def categorize_files(directory, ignore_dirs=None):
     """
     Scan a directory and categorize files as code or documentation.
 
     Args:
         directory: Path to directory (string or Path object)
+        ignore_dirs: Set of directory names to ignore (default: DEFAULT_IGNORE_DIRS)
 
     Returns:
         dict: {'code': [Path, ...], 'docs': [Path, ...]}
@@ -109,7 +143,7 @@ def categorize_files(directory):
         FileNotFoundError: If directory doesn't exist
         NotADirectoryError: If path points to a file, not a directory
     """
-    all_files = get_all_files(directory)
+    all_files = get_all_files(directory, ignore_dirs=ignore_dirs)
 
     code_files = []
     doc_files = []
@@ -123,13 +157,14 @@ def categorize_files(directory):
     return {'code': code_files, 'docs': doc_files}
 
 
-def get_directory_stats(directory, top_n=10):
+def get_directory_stats(directory, top_n=10, ignore_dirs=None):
     """
     Get comprehensive statistics about files in a directory.
 
     Args:
         directory: Path to directory (string or Path object)
         top_n: Number of largest files to include (default 10)
+        ignore_dirs: Set of directory names to ignore (default: DEFAULT_IGNORE_DIRS)
 
     Returns:
         dict: {
@@ -144,7 +179,7 @@ def get_directory_stats(directory, top_n=10):
         FileNotFoundError: If directory doesn't exist
         NotADirectoryError: If path points to a file, not a directory
     """
-    all_files = get_all_files(directory)
+    all_files = get_all_files(directory, ignore_dirs=ignore_dirs)
 
     # Count by category
     code_count = 0
