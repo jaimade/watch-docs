@@ -1,8 +1,11 @@
 """
 File readers for extracting content from code and documentation files.
 """
+import logging
 from itertools import islice
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def read_file_safe(filepath):
@@ -24,15 +27,29 @@ def read_file_safe(filepath):
         with path.open('r', encoding='utf-8') as f:
             return f.read()
     except UnicodeDecodeError:
-        pass  # Try fallback encoding
-    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        logger.debug("UTF-8 decode failed for %s, trying latin-1", path)
+    except FileNotFoundError:
+        logger.warning("File not found: %s", path)
+        return None
+    except PermissionError:
+        logger.warning("Permission denied: %s", path)
+        return None
+    except IsADirectoryError:
+        logger.warning("Path is a directory, not a file: %s", path)
         return None
 
     # Fallback: latin-1 (can read any byte sequence, never fails)
     try:
         with path.open('r', encoding='latin-1') as f:
             return f.read()
-    except (FileNotFoundError, PermissionError, IsADirectoryError):
+    except FileNotFoundError:
+        logger.warning("File not found: %s", path)
+        return None
+    except PermissionError:
+        logger.warning("Permission denied: %s", path)
+        return None
+    except IsADirectoryError:
+        logger.warning("Path is a directory, not a file: %s", path)
         return None
 
 
@@ -77,12 +94,27 @@ def get_file_preview(filepath, max_lines=10):
             # islice(iterator, n) takes only the first n items WITHOUT reading the rest
             lines = list(islice(f, max_lines))
     except UnicodeDecodeError:
+        logger.debug("UTF-8 decode failed for %s, trying latin-1", path)
         try:
             with path.open('r', encoding='latin-1') as f:
                 lines = list(islice(f, max_lines))
-        except (FileNotFoundError, PermissionError, IsADirectoryError):
+        except FileNotFoundError:
+            logger.warning("File not found: %s", path)
             return []
-    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        except PermissionError:
+            logger.warning("Permission denied: %s", path)
+            return []
+        except IsADirectoryError:
+            logger.warning("Path is a directory: %s", path)
+            return []
+    except FileNotFoundError:
+        logger.warning("File not found: %s", path)
+        return []
+    except PermissionError:
+        logger.warning("Permission denied: %s", path)
+        return []
+    except IsADirectoryError:
+        logger.warning("Path is a directory: %s", path)
         return []
 
     # Strip trailing newlines and add line numbers

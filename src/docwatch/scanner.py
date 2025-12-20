@@ -1,8 +1,11 @@
 """
 File scanner for categorizing code and documentation files
 """
+import logging
 from collections import Counter
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # Directories to ignore by default
@@ -93,7 +96,7 @@ def get_all_files(directory, ignore_dirs=None):
             if item.is_file():
                 files.append(item)
         except PermissionError:
-            print(f"Warning: Permission denied for {item}")
+            logger.warning("Permission denied: %s", item)
             continue
 
     return files
