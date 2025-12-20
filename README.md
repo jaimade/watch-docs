@@ -1,6 +1,6 @@
 # docwatch
 
-File scanner and content extractor for analyzing codebases. Categorizes files, extracts structured information from code and documentation.
+Documentation decay detection for codebases. Scans code and documentation files, builds a relationship graph, and identifies coverage gaps and stale references.
 
 ## Installation
 
@@ -67,18 +67,22 @@ stats = get_directory_stats('/path/to/project')
 ### Extraction Pipeline
 
 ```python
-from docwatch.extractor import process_directory, extract_code_info, extract_doc_info
+from pathlib import Path
+from docwatch.extractor import process_directory, extract_code_file, extract_doc_file
 
 # Process entire directory
-code_files, doc_files = process_directory('/path/to/project')
+code_files, doc_files = process_directory(Path('/path/to/project'))
 
 # Process single file
-from pathlib import Path
-code_info = extract_code_info(Path('app.py'))
-# CodeFile(path=..., language='python', functions=[...], classes=[...], imports=[...])
+code_file = extract_code_file(Path('app.py'))
+# CodeFile with entities:
+#   code_file.entities  # [CodeEntity(name='main', entity_type=FUNCTION, ...), ...]
+#   code_file.language  # Language.PYTHON
 
-doc_info = extract_doc_info(Path('README.md'))
-# DocFile(path=..., format='markdown', headers=[...], code_references=[...], links=[...])
+doc_file = extract_doc_file(Path('README.md'))
+# DocFile with references:
+#   doc_file.references  # [DocReference(text='main', reference_type=INLINE_CODE, ...), ...]
+#   doc_file.format      # DocFormat.MARKDOWN
 ```
 
 ### File Readers
@@ -135,6 +139,78 @@ extractor.extract_links(content)
 # [{'text': 'link', 'url': 'https://...', 'line': 15}, ...]
 ```
 
+### Documentation Graph
+
+```python
+from docwatch.graph import DocumentationGraph
+from docwatch.extractor import extract_code_file, extract_doc_file
+
+# Build a graph from files
+graph = DocumentationGraph()
+graph.add_code_file(extract_code_file(Path('app.py')))
+graph.add_doc_file(extract_doc_file(Path('README.md')))
+
+# Query the graph
+list(graph.get_entities())      # ['entity:app.main', 'entity:app.MyClass', ...]
+list(graph.get_references())    # ['ref:README.md:5:main', ...]
+graph.is_entity_documented('entity:app.main')  # True/False
+```
+
+### Documentation Analyzer
+
+```python
+from pathlib import Path
+from docwatch.analyzer import DocumentationAnalyzer
+
+# Analyze a project
+analyzer = DocumentationAnalyzer()
+analyzer.analyze_directory(Path('/path/to/project'))
+
+# Get coverage statistics
+stats = analyzer.get_coverage_stats()
+stats.coverage_percent      # 75.0
+stats.undocumented_entities # 5
+stats.broken_references     # 2
+
+# Per-file coverage
+analyzer.get_coverage_by_file()
+# {'src/main.py': 100.0, 'src/utils.py': 50.0, ...}
+
+# Find documentation clusters (related code/docs)
+analyzer.find_documentation_clusters()
+# [['README.md', 'src/main.py'], ['docs/api.md', 'src/api.py'], ...]
+
+# Get prioritized issues (with typo detection)
+issues = analyzer.get_priority_issues()
+# [
+#   {'type': 'broken_reference', 'priority': 0.9, 'reason': "similar to 'process_data'", ...},
+#   {'type': 'undocumented', 'priority': 0.8, 'reason': 'Public class', ...},
+# ]
+
+# Export full analysis as JSON
+analyzer.to_dict()
+```
+
+### Data Models
+
+```python
+from docwatch.models import (
+    Language, DocFormat, EntityType, ReferenceType, LinkType,
+    Location, CodeEntity, DocReference, CodeDocLink, CodeFile, DocFile
+)
+
+# All models are frozen dataclasses (immutable, hashable)
+entity = CodeEntity(
+    name='process_data',
+    entity_type=EntityType.FUNCTION,
+    location=Location(file=Path('app.py'), line_start=42)
+)
+entity.qualified_name  # 'app.process_data'
+
+# Serialize to dict for JSON export
+entity.to_dict()
+```
+
 ## Supported Formats
 
 ### Code Files
@@ -159,11 +235,14 @@ extractor.extract_links(content)
 
 ```
 src/docwatch/
-├── __init__.py
+├── __init__.py             # Public API exports
+├── models.py               # Data models (CodeEntity, DocReference, etc.)
 ├── scanner.py              # File discovery and categorization
 ├── readers.py              # Safe file reading utilities
+├── extractor.py            # Extraction pipeline
+├── graph.py                # NetworkX-based relationship graph
+├── analyzer.py             # Coverage analysis and issue detection
 ├── cli.py                  # Command-line interface
-├── extractor.py            # Extraction pipeline and data classes
 └── extractors/
     ├── python_extractor.py
     ├── js_extractor.py
