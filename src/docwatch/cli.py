@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from docwatch.scanner import categorize_files, get_directory_stats
+from docwatch.extractor import process_directory
 
 # Create a console instance for all output
 console = Console()
@@ -85,6 +86,71 @@ def print_stats(stats):
         console.print(f"  [yellow]{size:>10}[/]  [dim]{file_info['path']}[/]")
 
 
+def print_extraction_results(code_files, doc_files, base_dir):
+    """Print detailed extraction analysis."""
+
+    # Code Analysis
+    console.print("\n[bold cyan]Code Analysis:[/]")
+    for cf in sorted(code_files, key=lambda x: x.path):
+        rel_path = cf.path.relative_to(base_dir) if cf.path.is_relative_to(base_dir) else cf.path
+        console.print(f"  [cyan]{rel_path}[/]")
+
+        funcs = cf.functions[:10]
+        func_str = ", ".join(funcs) if funcs else "none"
+        if len(cf.functions) > 10:
+            func_str += f" [dim](+{len(cf.functions) - 10} more)[/]"
+        console.print(f"    Functions: [white]{func_str}[/]")
+
+        class_str = ", ".join(cf.classes) if cf.classes else "none"
+        console.print(f"    Classes: [white]{class_str}[/]")
+
+    # Documentation Analysis
+    console.print("\n[bold green]Documentation Analysis:[/]")
+    for df in sorted(doc_files, key=lambda x: x.path):
+        rel_path = df.path.relative_to(base_dir) if df.path.is_relative_to(base_dir) else df.path
+        console.print(f"  [green]{rel_path}[/]")
+
+        headers = [h['text'] for h in df.headers[:5]]
+        header_str = ", ".join(headers) if headers else "none"
+        if len(df.headers) > 5:
+            header_str += f" [dim](+{len(df.headers) - 5} more)[/]"
+        console.print(f"    Headers: [white]{header_str}[/]")
+
+        # Filter code references to likely identifiers (no special chars, reasonable length)
+        refs = [r for r in df.code_references
+                if r.replace('_', '').isalnum() and 2 < len(r) < 50][:10]
+        ref_str = ", ".join(refs) if refs else "none"
+        if len(refs) < len(df.code_references):
+            remaining = len([r for r in df.code_references
+                           if r.replace('_', '').isalnum() and 2 < len(r) < 50]) - 10
+            if remaining > 0:
+                ref_str += f" [dim](+{remaining} more)[/]"
+        console.print(f"    Code references: [white]{ref_str}[/]")
+
+    # Potential links summary
+    console.print("\n[bold yellow]Potential Links Found:[/]")
+
+    # Collect all code symbols
+    all_functions = set()
+    all_classes = set()
+    for cf in code_files:
+        all_functions.update(cf.functions)
+        all_classes.update(cf.classes)
+    all_symbols = all_functions | all_classes
+
+    # Find which docs reference which symbols
+    for df in sorted(doc_files, key=lambda x: x.path):
+        rel_path = df.path.relative_to(base_dir) if df.path.is_relative_to(base_dir) else df.path
+
+        # Find matching references
+        matches = [r for r in df.code_references if r in all_symbols]
+
+        if matches:
+            console.print(f"  [green]{rel_path}[/] references: [white]{', '.join(matches[:10])}[/]")
+            if len(matches) > 10:
+                console.print(f"    [dim](+{len(matches) - 10} more)[/]")
+
+
 def save_results(results, stats, output_path):
     """Save results to JSON file."""
     output = {
@@ -135,6 +201,11 @@ def main():
         action="store_true",
         help="Don't ignore common directories (.git, node_modules, etc.)"
     )
+    parser.add_argument(
+        "--extract",
+        action="store_true",
+        help="Extract and display code/documentation analysis"
+    )
 
     args = parser.parse_args()
 
@@ -161,6 +232,10 @@ def main():
 
     if args.stats:
         print_stats(stats)
+
+    if args.extract:
+        code_files, doc_files = process_directory(args.directory, ignore_dirs=ignore_dirs)
+        print_extraction_results(code_files, doc_files, args.directory)
 
     if args.output:
         save_results(results, stats, args.output)

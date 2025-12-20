@@ -21,11 +21,31 @@ docwatch /path/to/project
 # With detailed statistics
 docwatch /path/to/project --stats
 
+# Extract code and documentation analysis
+docwatch /path/to/project --extract
+
 # Export to JSON
 docwatch /path/to/project --stats --output results.json
 
 # Include normally-ignored directories (.git, node_modules, etc.)
 docwatch /path/to/project --no-ignore
+```
+
+### Extraction Output
+
+```
+Code Analysis:
+  src/main.py
+    Functions: main, setup, cleanup
+    Classes: Application, Config
+
+Documentation Analysis:
+  README.md
+    Headers: Installation, Usage, API Reference
+    Code references: main, setup, Application
+
+Potential Links Found:
+  README.md references: main, setup, Application
 ```
 
 ## API
