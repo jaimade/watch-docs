@@ -1,9 +1,12 @@
 """
 Command-line interface for docwatch
 """
+from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 from rich.markup import escape as rich_escape
@@ -19,6 +22,7 @@ from docwatch.constants import (
 )
 from docwatch.scanner import categorize_files, get_directory_stats
 from docwatch.extractor import process_directory
+from docwatch.models import CodeFile, DocFile
 from docwatch.analyzer import DocumentationAnalyzer
 from docwatch.git import (
     ChangeTracker,
@@ -32,7 +36,7 @@ from docwatch.git import (
 console = Console()
 
 
-def format_size(size_bytes):
+def format_size(size_bytes: int | float) -> str:
     """Convert bytes to human-readable format."""
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size_bytes < 1024:
@@ -41,7 +45,7 @@ def format_size(size_bytes):
     return f"{size_bytes:.1f} TB"
 
 
-def print_basic_results(results):
+def print_basic_results(results: dict[str, list[Path]]) -> None:
     """Print basic categorization results with Rich styling."""
     code_files = results['code']
     doc_files = results['docs']
@@ -68,7 +72,7 @@ def print_basic_results(results):
             console.print(f"  [dim]... and {len(code_files) - 20} more[/]")
 
 
-def print_stats(stats):
+def print_stats(stats: dict) -> None:
     """Print detailed statistics using Rich tables."""
     console.print()
 
@@ -101,7 +105,11 @@ def print_stats(stats):
         console.print(f"  [yellow]{size:>10}[/]  [dim]{rich_escape(str(file_info['path']))}[/]")
 
 
-def print_extraction_results(code_files, doc_files, base_dir):
+def print_extraction_results(
+    code_files: list[CodeFile],
+    doc_files: list[DocFile],
+    base_dir: Path,
+) -> None:
     """Print detailed extraction analysis."""
     from docwatch.models import EntityType
 
@@ -279,7 +287,11 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
                 )
 
 
-def save_results(results, stats, output_path):
+def save_results(
+    results: dict[str, list[Path]],
+    stats: Optional[dict],
+    output_path: Path,
+) -> None:
     """Save results to JSON file."""
     output = {
         'categorized_files': {
@@ -495,7 +507,7 @@ def analyze_changes(repo_path: Path, since: str) -> int:
     return 0
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Documentation decay detection system"
     )
