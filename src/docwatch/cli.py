@@ -184,6 +184,42 @@ def make_progress_bar(percentage: float, width: int = 10) -> str:
     return "█" * filled + "░" * empty
 
 
+def _relative_path(filepath: str | Path, base_dir: Path) -> Path:
+    """Get path relative to base_dir, or absolute if not under base_dir."""
+    path = Path(filepath)
+    try:
+        return path.relative_to(base_dir)
+    except ValueError:
+        return path
+
+
+def _coverage_style(pct: float) -> str:
+    """Get Rich style name based on coverage percentage."""
+    if pct >= COVERAGE_HEALTHY_THRESHOLD:
+        return "green"
+    if pct >= COVERAGE_WARNING_THRESHOLD:
+        return "yellow"
+    return "red"
+
+
+def _print_priority_issue(index: int, issue: dict, base_dir: Path) -> None:
+    """Print a single priority issue."""
+    if issue["type"] == "undocumented":
+        entity = issue["entity"]
+        rel_path = _relative_path(entity["location"]["file"], base_dir)
+        console.print(
+            f"  {index}. Document: [cyan]{rich_escape(str(rel_path))}[/]"
+            f"::[white]{rich_escape(entity['name'])}[/]"
+        )
+    else:
+        ref = issue["reference"]
+        rel_path = _relative_path(ref["location"]["file"], base_dir)
+        console.print(
+            f"  {index}. Fix broken reference in [green]{rich_escape(str(rel_path))}[/] "
+            f"line {ref['location']['line_start']}: [yellow]`{rich_escape(ref['clean_text'])}`[/]"
+        )
+
+
 def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> None:
     """Print a comprehensive documentation health report."""
     stats = analyzer.get_coverage_stats()
@@ -200,42 +236,22 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
 
     # Overall coverage
     coverage_pct = stats.coverage_percent
-    if coverage_pct >= COVERAGE_HEALTHY_THRESHOLD:
-        coverage_style = "green"
-    elif coverage_pct >= COVERAGE_WARNING_THRESHOLD:
-        coverage_style = "yellow"
-    else:
-        coverage_style = "red"
-
+    style = _coverage_style(coverage_pct)
     console.print()
     console.print(
-        f"[bold]Coverage:[/] [{coverage_style}]{coverage_pct:.0f}%[/] "
+        f"[bold]Coverage:[/] [{style}]{coverage_pct:.0f}%[/] "
         f"({stats.documented_entities} of {stats.total_entities} code entities documented)"
     )
 
     # By file table
     if coverage_by_file:
         console.print("\n[bold]By File:[/]")
+        sorted_files = sorted(coverage_by_file.items(), key=lambda x: x[1])[:10]
 
-        # Sort by coverage (lowest first to highlight problem areas)
-        sorted_files = sorted(coverage_by_file.items(), key=lambda x: x[1])
-
-        for filepath, pct in sorted_files[:10]:
-            # Make path relative if possible
-            try:
-                rel_path = Path(filepath).relative_to(base_dir)
-            except ValueError:
-                rel_path = Path(filepath)
-
+        for filepath, pct in sorted_files:
+            rel_path = _relative_path(filepath, base_dir)
             bar = make_progress_bar(pct)
-
-            if pct >= COVERAGE_HEALTHY_THRESHOLD:
-                style = "green"
-            elif pct >= COVERAGE_WARNING_THRESHOLD:
-                style = "yellow"
-            else:
-                style = "red"
-
+            style = _coverage_style(pct)
             console.print(f"  {rich_escape(str(rel_path)):<30} [{style}]{pct:>3.0f}%[/] {bar}")
 
         if len(coverage_by_file) > 10:
@@ -243,13 +259,11 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
 
     # Issues summary
     high_issues = [i for i in priority_issues if i["priority"] >= PRIORITY_HIGH_THRESHOLD]
-    medium_issues = [i for i in priority_issues if PRIORITY_MEDIUM_THRESHOLD <= i["priority"] < PRIORITY_HIGH_THRESHOLD]
     low_issues = [i for i in priority_issues if i["priority"] < PRIORITY_MEDIUM_THRESHOLD]
 
-    # Count by type
-    undocumented_high = len([i for i in high_issues if i["type"] == "undocumented"])
-    broken_refs = len([i for i in priority_issues if i["type"] == "broken_reference"])
-    undocumented_low = len([i for i in low_issues if i["type"] == "undocumented"])
+    undocumented_high = sum(1 for i in high_issues if i["type"] == "undocumented")
+    broken_refs = sum(1 for i in priority_issues if i["type"] == "broken_reference")
+    undocumented_low = sum(1 for i in low_issues if i["type"] == "undocumented")
 
     console.print("\n[bold]Issues Found:[/]")
     if undocumented_high > 0:
@@ -258,7 +272,6 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
         console.print(f"  [yellow]MEDIUM:[/] {broken_refs} documentation references point to non-existent code")
     if undocumented_low > 0:
         console.print(f"  [dim]LOW:[/] {undocumented_low} internal/private entities are undocumented")
-
     if not priority_issues:
         console.print("  [green]✓ No issues found![/]")
 
@@ -266,25 +279,7 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
     if priority_issues:
         console.print("\n[bold]Top Priority:[/]")
         for i, issue in enumerate(priority_issues[:5], 1):
-            if issue["type"] == "undocumented":
-                entity = issue["entity"]
-                location = entity["location"]
-                try:
-                    rel_path = Path(location["file"]).relative_to(base_dir)
-                except ValueError:
-                    rel_path = Path(location["file"])
-                console.print(f"  {i}. Document: [cyan]{rich_escape(str(rel_path))}[/]::[white]{rich_escape(entity['name'])}[/]")
-            else:
-                ref = issue["reference"]
-                location = ref["location"]
-                try:
-                    rel_path = Path(location["file"]).relative_to(base_dir)
-                except ValueError:
-                    rel_path = Path(location["file"])
-                console.print(
-                    f"  {i}. Fix broken reference in [green]{rich_escape(str(rel_path))}[/] "
-                    f"line {location['line_start']}: [yellow]`{rich_escape(ref['clean_text'])}`[/]"
-                )
+            _print_priority_issue(i, issue, base_dir)
 
 
 def save_results(
