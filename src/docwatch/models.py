@@ -4,10 +4,67 @@ Data models for representing code and documentation structures.
 All models are immutable (frozen) dataclasses for safety and hashability.
 """
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
+
+from docwatch.constants import (
+    LANGUAGE_EXTENSION_MAP,
+    DOC_FORMAT_EXTENSION_MAP,
+    SOURCE_DIR_PREFIXES,
+)
+
+
+# TypedDicts for extractor return types
+class HeaderInfo(TypedDict):
+    """A header extracted from documentation."""
+    level: int
+    text: str
+    line: int
+
+
+class CodeBlockInfo(TypedDict):
+    """A code block extracted from documentation."""
+    language: str
+    code: str
+    start_line: int
+    end_line: int
+
+
+class LinkInfo(TypedDict):
+    """A link extracted from documentation."""
+    text: str
+    url: str
+    line: int
+
+
+def file_path_to_module_path(file_path: Path) -> str:
+    """
+    Convert a file path to a Python module-style path.
+
+    Strips common source directory prefixes (configurable via
+    SOURCE_DIR_PREFIXES in constants.py) to produce clean module paths.
+
+    Examples:
+        src/mypackage/module.py -> mypackage.module
+        lib/utils/helper.py -> utils.helper
+        app/models/user.py -> models.user
+
+    Args:
+        file_path: Path to a source file
+
+    Returns:
+        Dot-separated module path string
+    """
+    parts = list(file_path.with_suffix("").parts)
+
+    # Remove common source directory prefixes
+    for prefix in SOURCE_DIR_PREFIXES:
+        if prefix in parts:
+            parts = parts[parts.index(prefix) + 1:]
+            break
+
+    return ".".join(parts) if parts else file_path.stem
 
 
 class Language(Enum):
@@ -25,22 +82,10 @@ class Language(Enum):
     @classmethod
     def from_extension(cls, ext: str) -> "Language":
         """Map file extension to language."""
-        mapping = {
-            ".py": cls.PYTHON,
-            ".pyi": cls.PYTHON,
-            ".js": cls.JAVASCRIPT,
-            ".mjs": cls.JAVASCRIPT,
-            ".cjs": cls.JAVASCRIPT,
-            ".jsx": cls.JAVASCRIPT,
-            ".ts": cls.TYPESCRIPT,
-            ".tsx": cls.TYPESCRIPT,
-            ".go": cls.GO,
-            ".rs": cls.RUST,
-            ".java": cls.JAVA,
-            ".php": cls.PHP,
-            ".rb": cls.RUBY,
-        }
-        return mapping.get(ext.lower(), cls.UNKNOWN)
+        lang_str = LANGUAGE_EXTENSION_MAP.get(ext.lower())
+        if lang_str:
+            return cls(lang_str)
+        return cls.UNKNOWN
 
 
 class DocFormat(Enum):
@@ -53,15 +98,10 @@ class DocFormat(Enum):
     @classmethod
     def from_extension(cls, ext: str) -> "DocFormat":
         """Map file extension to doc format."""
-        mapping = {
-            ".md": cls.MARKDOWN,
-            ".markdown": cls.MARKDOWN,
-            ".rst": cls.RST,
-            ".adoc": cls.ASCIIDOC,
-            ".asciidoc": cls.ASCIIDOC,
-            ".txt": cls.PLAIN,
-        }
-        return mapping.get(ext.lower(), cls.PLAIN)
+        format_str = DOC_FORMAT_EXTENSION_MAP.get(ext.lower())
+        if format_str:
+            return cls(format_str)
+        return cls.PLAIN
 
 
 class EntityType(Enum):
@@ -125,6 +165,46 @@ class Location:
             line_end=data.get("line_end"),
         )
 
+    @classmethod
+    def from_str(cls, location_str: str) -> Optional["Location"]:
+        """
+        Parse a location string back into a Location object.
+
+        Handles formats produced by __str__:
+        - "path/to/file.py:42" -> Location(file, 42, None)
+        - "path/to/file.py:42-50" -> Location(file, 42, 50)
+        - "C:\\path\\file.py:42" -> Windows paths work via rsplit
+
+        Returns None if the string cannot be parsed.
+        """
+        if ":" not in location_str:
+            return None
+
+        # Split from right to handle Windows paths (C:\path\file.py:42)
+        parts = location_str.rsplit(":", 1)
+        if len(parts) != 2:
+            return None
+
+        file_path, line_part = parts
+
+        # Parse line numbers (could be "42" or "42-50")
+        try:
+            if "-" in line_part:
+                start_str, end_str = line_part.split("-", 1)
+                line_start = int(start_str)
+                line_end = int(end_str)
+            else:
+                line_start = int(line_part)
+                line_end = None
+        except ValueError:
+            return None
+
+        return cls(
+            file=Path(file_path),
+            line_start=line_start,
+            line_end=line_end,
+        )
+
 
 @dataclass(frozen=True)
 class CodeEntity:
@@ -148,16 +228,12 @@ class CodeEntity:
 
     @property
     def module_path(self) -> str:
-        """Convert file path to module-style path."""
-        parts = list(self.location.file.with_suffix("").parts)
+        """
+        Convert file path to module-style path.
 
-        # Remove common prefixes
-        for prefix in ("src", "lib", "source"):
-            if prefix in parts:
-                parts = parts[parts.index(prefix) + 1:]
-                break
-
-        return ".".join(parts) if parts else self.location.file.stem
+        See file_path_to_module_path() for details on prefix stripping.
+        """
+        return file_path_to_module_path(self.location.file)
 
     @property
     def qualified_name(self) -> str:

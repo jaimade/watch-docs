@@ -1,10 +1,28 @@
 """
 Extract structured information from JavaScript/TypeScript source code.
 """
-import re
+from docwatch.extractors.patterns import (
+    JS_FUNCTION_DECLARATION,
+    JS_ARROW_FUNCTION,
+    JS_FUNCTION_EXPRESSION,
+    JS_CLASS_DEF,
+    JS_ES6_IMPORT,
+    JS_SIDE_EFFECT_IMPORT,
+    JS_REQUIRE,
+    JS_DYNAMIC_IMPORT,
+    JS_EXPORT_DECLARATION,
+    JS_EXPORT_BRACES,
+)
+
+__all__ = [
+    "extract_function_names",
+    "extract_class_names",
+    "extract_imports",
+    "extract_exports",
+]
 
 
-def extract_function_names(content):
+def extract_function_names(content: str) -> list[str]:
     """
     Extract function names from JavaScript/TypeScript code.
 
@@ -23,19 +41,14 @@ def extract_function_names(content):
     """
     functions = []
 
-    # Traditional function declarations: function name() or async function name()
-    # \b ensures we don't match inside other words
-    pattern1 = r'\b(?:async\s+)?function\s+(\w+)\s*\('
-    functions.extend(re.findall(pattern1, content))
+    # Traditional function declarations
+    functions.extend(JS_FUNCTION_DECLARATION.findall(content))
 
-    # Arrow functions and function expressions assigned to const/let/var
-    # const name = () => {} or const name = function() {}
-    pattern2 = r'\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>'
-    functions.extend(re.findall(pattern2, content))
+    # Arrow functions
+    functions.extend(JS_ARROW_FUNCTION.findall(content))
 
-    # Function expressions: const name = function() {}
-    pattern3 = r'\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\('
-    functions.extend(re.findall(pattern3, content))
+    # Function expressions
+    functions.extend(JS_FUNCTION_EXPRESSION.findall(content))
 
     # Return unique, preserving order
     seen = set()
@@ -48,7 +61,7 @@ def extract_function_names(content):
     return unique
 
 
-def extract_class_names(content):
+def extract_class_names(content: str) -> list[str]:
     """
     Extract class names from JavaScript/TypeScript code.
 
@@ -63,14 +76,10 @@ def extract_class_names(content):
     Returns:
         list: Class names found in the code
     """
-    # Pattern: optional export, then class keyword, then name
-    # \b prevents matching inside words
-    # [\w.]+ allows for Parent.Child style extends (e.g., React.Component)
-    pattern = r'\bclass\s+(\w+)(?:\s+extends\s+[\w.]+)?(?:\s+implements\s+[\w.,\s]+)?\s*\{'
-    return re.findall(pattern, content)
+    return JS_CLASS_DEF.findall(content)
 
 
-def extract_imports(content):
+def extract_imports(content: str) -> list[str]:
     """
     Extract import statements from JavaScript/TypeScript code.
 
@@ -88,21 +97,17 @@ def extract_imports(content):
     """
     imports = []
 
-    # ES6 imports: import ... from 'module' or "module"
-    pattern1 = r'\bimport\s+.*?\s+from\s+[\'"]([^\'"]+)[\'"]'
-    imports.extend(re.findall(pattern1, content))
+    # ES6 imports
+    imports.extend(JS_ES6_IMPORT.findall(content))
 
-    # Side-effect imports: import 'module'
-    pattern2 = r'\bimport\s+[\'"]([^\'"]+)[\'"]'
-    imports.extend(re.findall(pattern2, content))
+    # Side-effect imports
+    imports.extend(JS_SIDE_EFFECT_IMPORT.findall(content))
 
-    # CommonJS require: require('module')
-    pattern3 = r'\brequire\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
-    imports.extend(re.findall(pattern3, content))
+    # CommonJS require
+    imports.extend(JS_REQUIRE.findall(content))
 
-    # Dynamic imports: import('module')
-    pattern4 = r'\bimport\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
-    imports.extend(re.findall(pattern4, content))
+    # Dynamic imports
+    imports.extend(JS_DYNAMIC_IMPORT.findall(content))
 
     # Return unique, preserving order
     seen = set()
@@ -115,7 +120,7 @@ def extract_imports(content):
     return unique
 
 
-def extract_exports(content):
+def extract_exports(content: str) -> list[str]:
     """
     Extract exported names from JavaScript/TypeScript code.
 
@@ -135,18 +140,13 @@ def extract_exports(content):
     exports = []
 
     # export function/class/const name
-    pattern1 = r'\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+(\w+)'
-    exports.extend(re.findall(pattern1, content))
+    exports.extend(JS_EXPORT_DECLARATION.findall(content))
 
     # export { name, name2 }
-    pattern2 = r'\bexport\s*\{([^}]+)\}'
-    for match in re.findall(pattern2, content):
+    for match in JS_EXPORT_BRACES.findall(content):
         # Split by comma and clean up
         names = [n.strip().split(' ')[0] for n in match.split(',')]
         exports.extend(n for n in names if n and n.isidentifier())
-
-    # export default (for anonymous)
-    # We skip these as they don't have names
 
     # Return unique, preserving order
     seen = set()

@@ -6,13 +6,27 @@ import json
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from docwatch.constants import (
+    COVERAGE_HEALTHY_THRESHOLD,
+    COVERAGE_WARNING_THRESHOLD,
+    PRIORITY_HIGH_THRESHOLD,
+    PRIORITY_MEDIUM_THRESHOLD,
+)
 from docwatch.scanner import categorize_files, get_directory_stats
 from docwatch.extractor import process_directory
 from docwatch.analyzer import DocumentationAnalyzer
+from docwatch.git import (
+    ChangeTracker,
+    ImpactAnalyzer,
+    ImpactType,
+    ChangeType,
+    GitCommandError,
+)
 
 # Create a console instance for all output
 console = Console()
@@ -44,12 +58,12 @@ def print_basic_results(results):
     if doc_files:
         console.print("\n[bold green]Documentation files:[/]")
         for f in sorted(doc_files):
-            console.print(f"  [dim]•[/] [green]{f}[/]")
+            console.print(f"  [dim]•[/] [green]{rich_escape(str(f))}[/]")
 
     if code_files:
         console.print("\n[bold cyan]Code files:[/]")
         for f in sorted(code_files)[:20]:
-            console.print(f"  [dim]•[/] [cyan]{f}[/]")
+            console.print(f"  [dim]•[/] [cyan]{rich_escape(str(f))}[/]")
         if len(code_files) > 20:
             console.print(f"  [dim]... and {len(code_files) - 20} more[/]")
 
@@ -84,7 +98,7 @@ def print_stats(stats):
     console.print("\n[bold yellow]Largest files:[/]")
     for file_info in stats['largest_files'][:5]:
         size = format_size(file_info['size'])
-        console.print(f"  [yellow]{size:>10}[/]  [dim]{file_info['path']}[/]")
+        console.print(f"  [yellow]{size:>10}[/]  [dim]{rich_escape(str(file_info['path']))}[/]")
 
 
 def print_extraction_results(code_files, doc_files, base_dir):
@@ -95,11 +109,11 @@ def print_extraction_results(code_files, doc_files, base_dir):
     console.print("\n[bold cyan]Code Analysis:[/]")
     for cf in sorted(code_files, key=lambda x: x.path):
         rel_path = cf.path.relative_to(base_dir) if cf.path.is_relative_to(base_dir) else cf.path
-        console.print(f"  [cyan]{rel_path}[/]")
+        console.print(f"  [cyan]{rich_escape(str(rel_path))}[/]")
 
         # Get function names from entities
         func_names = [e.name for e in cf.entities if e.entity_type == EntityType.FUNCTION][:10]
-        func_str = ", ".join(func_names) if func_names else "none"
+        func_str = rich_escape(", ".join(func_names)) if func_names else "none"
         total_funcs = len([e for e in cf.entities if e.entity_type == EntityType.FUNCTION])
         if total_funcs > 10:
             func_str += f" [dim](+{total_funcs - 10} more)[/]"
@@ -107,17 +121,17 @@ def print_extraction_results(code_files, doc_files, base_dir):
 
         # Get class names from entities
         class_names = [e.name for e in cf.entities if e.entity_type == EntityType.CLASS]
-        class_str = ", ".join(class_names) if class_names else "none"
+        class_str = rich_escape(", ".join(class_names)) if class_names else "none"
         console.print(f"    Classes: [white]{class_str}[/]")
 
     # Documentation Analysis
     console.print("\n[bold green]Documentation Analysis:[/]")
     for df in sorted(doc_files, key=lambda x: x.path):
         rel_path = df.path.relative_to(base_dir) if df.path.is_relative_to(base_dir) else df.path
-        console.print(f"  [green]{rel_path}[/]")
+        console.print(f"  [green]{rich_escape(str(rel_path))}[/]")
 
         headers = [h['text'] for h in df.headers[:5]]
-        header_str = ", ".join(headers) if headers else "none"
+        header_str = rich_escape(", ".join(headers)) if headers else "none"
         if len(df.headers) > 5:
             header_str += f" [dim](+{len(df.headers) - 5} more)[/]"
         console.print(f"    Headers: [white]{header_str}[/]")
@@ -127,7 +141,7 @@ def print_extraction_results(code_files, doc_files, base_dir):
         # Filter to likely identifiers (no special chars, reasonable length)
         filtered_refs = [r for r in code_refs
                         if r.replace('_', '').isalnum() and 2 < len(r) < 50][:10]
-        ref_str = ", ".join(filtered_refs) if filtered_refs else "none"
+        ref_str = rich_escape(", ".join(filtered_refs)) if filtered_refs else "none"
         total_valid = len([r for r in code_refs
                          if r.replace('_', '').isalnum() and 2 < len(r) < 50])
         if total_valid > 10:
@@ -150,7 +164,7 @@ def print_extraction_results(code_files, doc_files, base_dir):
         matches = [r.clean_text for r in df.references if r.clean_text in all_symbols]
 
         if matches:
-            console.print(f"  [green]{rel_path}[/] references: [white]{', '.join(matches[:10])}[/]")
+            console.print(f"  [green]{rich_escape(str(rel_path))}[/] references: [white]{rich_escape(', '.join(matches[:10]))}[/]")
             if len(matches) > 10:
                 console.print(f"    [dim](+{len(matches) - 10} more)[/]")
 
@@ -178,9 +192,9 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
 
     # Overall coverage
     coverage_pct = stats.coverage_percent
-    if coverage_pct >= 80:
+    if coverage_pct >= COVERAGE_HEALTHY_THRESHOLD:
         coverage_style = "green"
-    elif coverage_pct >= 50:
+    elif coverage_pct >= COVERAGE_WARNING_THRESHOLD:
         coverage_style = "yellow"
     else:
         coverage_style = "red"
@@ -207,22 +221,22 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
 
             bar = make_progress_bar(pct)
 
-            if pct >= 80:
+            if pct >= COVERAGE_HEALTHY_THRESHOLD:
                 style = "green"
-            elif pct >= 50:
+            elif pct >= COVERAGE_WARNING_THRESHOLD:
                 style = "yellow"
             else:
                 style = "red"
 
-            console.print(f"  {str(rel_path):<30} [{style}]{pct:>3.0f}%[/] {bar}")
+            console.print(f"  {rich_escape(str(rel_path)):<30} [{style}]{pct:>3.0f}%[/] {bar}")
 
         if len(coverage_by_file) > 10:
             console.print(f"  [dim]... and {len(coverage_by_file) - 10} more files[/]")
 
     # Issues summary
-    high_issues = [i for i in priority_issues if i["priority"] >= 0.7]
-    medium_issues = [i for i in priority_issues if 0.4 <= i["priority"] < 0.7]
-    low_issues = [i for i in priority_issues if i["priority"] < 0.4]
+    high_issues = [i for i in priority_issues if i["priority"] >= PRIORITY_HIGH_THRESHOLD]
+    medium_issues = [i for i in priority_issues if PRIORITY_MEDIUM_THRESHOLD <= i["priority"] < PRIORITY_HIGH_THRESHOLD]
+    low_issues = [i for i in priority_issues if i["priority"] < PRIORITY_MEDIUM_THRESHOLD]
 
     # Count by type
     undocumented_high = len([i for i in high_issues if i["type"] == "undocumented"])
@@ -251,7 +265,7 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
                     rel_path = Path(location["file"]).relative_to(base_dir)
                 except ValueError:
                     rel_path = Path(location["file"])
-                console.print(f"  {i}. Document: [cyan]{rel_path}[/]::[white]{entity['name']}[/]")
+                console.print(f"  {i}. Document: [cyan]{rich_escape(str(rel_path))}[/]::[white]{rich_escape(entity['name'])}[/]")
             else:
                 ref = issue["reference"]
                 location = ref["location"]
@@ -260,8 +274,8 @@ def print_analysis_report(analyzer: DocumentationAnalyzer, base_dir: Path) -> No
                 except ValueError:
                     rel_path = Path(location["file"])
                 console.print(
-                    f"  {i}. Fix broken reference in [green]{rel_path}[/] "
-                    f"line {location['line_start']}: [yellow]`{ref['clean_text']}`[/]"
+                    f"  {i}. Fix broken reference in [green]{rich_escape(str(rel_path))}[/] "
+                    f"line {location['line_start']}: [yellow]`{rich_escape(ref['clean_text'])}`[/]"
                 )
 
 
@@ -288,7 +302,197 @@ def save_results(results, stats, output_path):
     with open(output_path, 'w') as f:
         json.dump(output, f, indent=2)
 
-    console.print(f"\n[bold green]✓[/] Results saved to [underline]{output_path}[/]")
+    console.print(f"\n[bold green]✓[/] Results saved to [underline]{rich_escape(str(output_path))}[/]")
+
+
+def analyze_changes(repo_path: Path, since: str) -> int:
+    """
+    Analyze recent code changes and their documentation impact.
+
+    Returns exit code (0 for success, 1 for error).
+    """
+    from datetime import datetime
+
+    console.print(Panel(
+        f"[bold]Analyzing changes since {since}[/]",
+        style="blue",
+        expand=False
+    ))
+    console.print()
+
+    # Initialize change tracker
+    try:
+        tracker = ChangeTracker(repo_path)
+    except (ValueError, GitCommandError) as e:
+        console.print(f"[bold red]Error:[/] {e}")
+        return 1
+
+    # Get commits since the specified date
+    try:
+        commits = tracker.get_changes_since(since, include_diffs=True)
+    except GitCommandError as e:
+        console.print(f"[bold red]Error getting commits:[/] {e}")
+        return 1
+
+    if not commits:
+        console.print("[yellow]No commits found in the specified time range.[/]")
+        return 0
+
+    console.print(f"[bold]Commits analyzed:[/] {len(commits)}")
+    console.print()
+
+    # Build documentation graph for the current state
+    console.print("[dim]Building documentation graph...[/]")
+    analyzer = DocumentationAnalyzer()
+    try:
+        analyzer.analyze_directory(repo_path)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not analyze documentation: {e}[/]")
+
+    # Create impact analyzer
+    impact_analyzer = ImpactAnalyzer(analyzer.graph)
+
+    # Collect all changes across commits
+    all_entity_changes = []
+    commits_with_changes = []
+
+    for commit in commits:
+        entity_changes = tracker.detect_entity_changes(commit)
+        if entity_changes:
+            commits_with_changes.append((commit, entity_changes))
+            all_entity_changes.extend(entity_changes)
+
+    # Print code changes
+    if commits_with_changes:
+        console.print("[bold cyan]Code Changes Detected:[/]")
+        for commit, changes in commits_with_changes:
+            short_hash = commit.hash[:7]
+            # Truncate message to first line
+            msg = commit.message.split('\n')[0][:60]
+            console.print(f"  [cyan]{short_hash}[/] - \"{msg}\"")
+
+            for change in changes:
+                change_type = change.change_type.value.upper()
+                entity_name = change.entity_name
+
+                # Color based on change type
+                if change.change_type == ChangeType.DELETED:
+                    style = "red"
+                elif change.change_type == ChangeType.ADDED:
+                    style = "green"
+                elif change.change_type == ChangeType.SIGNATURE_CHANGED:
+                    style = "yellow"
+                else:
+                    style = "dim"
+
+                rel_path = Path(change.file_path)
+                try:
+                    rel_path = rel_path.relative_to(repo_path)
+                except ValueError:
+                    pass
+
+                console.print(f"    [{style}]{change_type}:[/] {rich_escape(str(rel_path))}::[white]{rich_escape(entity_name)}[/]")
+
+                # Show signature changes
+                if change.change_type == ChangeType.SIGNATURE_CHANGED:
+                    if change.old_signature:
+                        console.print(f"      [dim]Old:[/] [red]{rich_escape(change.old_signature)}[/]")
+                    if change.new_signature:
+                        console.print(f"      [dim]New:[/] [green]{rich_escape(change.new_signature)}[/]")
+        console.print()
+    else:
+        console.print("[dim]No code entity changes detected in commits.[/]")
+        console.print()
+
+    # Analyze documentation impact
+    impacts = impact_analyzer.analyze_changes(all_entity_changes)
+
+    if impacts:
+        # Group by severity
+        high_impacts = [i for i in impacts if i.severity == "high"]
+        medium_impacts = [i for i in impacts if i.severity == "medium"]
+        low_impacts = [i for i in impacts if i.severity == "low"]
+
+        console.print("[bold]Documentation Impact:[/]")
+
+        if high_impacts:
+            console.print("  [bold red]HIGH IMPACT:[/]")
+            for impact in high_impacts:
+                if impact.impact_type == ImpactType.BROKEN_REFERENCE:
+                    console.print(
+                        f"    [red]{rich_escape(str(impact.doc_path))}:{impact.doc_line}[/] - "
+                        f"References deleted function [white]`{rich_escape(impact.referenced_entity)}`[/]"
+                    )
+                elif impact.impact_type == ImpactType.ADDED_UNDOCUMENTED:
+                    console.print(
+                        f"    [red]{rich_escape(str(impact.change.file_path))}[/] - "
+                        f"New [white]`{rich_escape(impact.referenced_entity)}`[/] has no documentation"
+                    )
+
+        if medium_impacts:
+            console.print("  [bold yellow]NEEDS REVIEW:[/]")
+            for impact in medium_impacts:
+                console.print(
+                    f"    [yellow]{rich_escape(str(impact.doc_path))}:{impact.doc_line}[/] - "
+                    f"References [white]`{rich_escape(impact.referenced_entity)}`[/], signature changed"
+                )
+
+        if low_impacts:
+            console.print("  [dim]LOW PRIORITY:[/]")
+            for impact in low_impacts[:5]:  # Limit to 5
+                if impact.impact_type == ImpactType.NEEDS_UPDATE:
+                    console.print(
+                        f"    [dim]{rich_escape(str(impact.doc_path))}:{impact.doc_line}[/] - "
+                        f"Docstring changed for [white]`{rich_escape(impact.referenced_entity)}`[/]"
+                    )
+                elif impact.impact_type == ImpactType.ADDED_UNDOCUMENTED:
+                    console.print(
+                        f"    [dim]{rich_escape(str(impact.change.file_path))}[/] - "
+                        f"New [white]`{rich_escape(impact.referenced_entity)}`[/] is undocumented"
+                    )
+            if len(low_impacts) > 5:
+                console.print(f"    [dim]... and {len(low_impacts) - 5} more[/]")
+
+        console.print()
+
+        # Generate recommendations
+        recommendations = []
+
+        for impact in high_impacts:
+            if impact.impact_type == ImpactType.BROKEN_REFERENCE:
+                recommendations.append(
+                    f"Remove or update reference to `{rich_escape(impact.referenced_entity)}` "
+                    f"in {rich_escape(str(impact.doc_path))}"
+                )
+
+        for impact in medium_impacts:
+            recommendations.append(
+                f"Update {rich_escape(str(impact.doc_path))} with new `{rich_escape(impact.referenced_entity)}` signature"
+            )
+
+        # Add recommendations for undocumented entities
+        undocumented = [i for i in impacts if i.impact_type == ImpactType.ADDED_UNDOCUMENTED]
+        if undocumented:
+            entity_names = list(set(i.referenced_entity for i in undocumented))[:3]
+            escaped_names = [rich_escape(name) for name in entity_names]
+            if len(undocumented) > 3:
+                recommendations.append(
+                    f"Document new functions: {', '.join(escaped_names)}, "
+                    f"and {len(undocumented) - 3} more"
+                )
+            else:
+                recommendations.append(
+                    f"Document new functions: {', '.join(escaped_names)}"
+                )
+
+        if recommendations:
+            console.print("[bold]Recommended actions:[/]")
+            for i, rec in enumerate(recommendations[:5], 1):
+                console.print(f"  {i}. {rec}")
+    else:
+        console.print("[green]✓ No documentation impact detected.[/]")
+
+    return 0
 
 
 def main():
@@ -325,19 +529,34 @@ def main():
         action="store_true",
         help="Run full documentation analysis and show health report"
     )
+    parser.add_argument(
+        "--changes",
+        action="store_true",
+        help="Analyze recent code changes and their documentation impact"
+    )
+    parser.add_argument(
+        "--since",
+        type=str,
+        default="7 days ago",
+        help="Time range for --changes (default: '7 days ago')"
+    )
 
     args = parser.parse_args()
 
     # Validate directory
     if not args.directory.exists():
-        console.print(f"[bold red]Error:[/] Directory does not exist: {args.directory}")
+        console.print(f"[bold red]Error:[/] Directory does not exist: {rich_escape(str(args.directory))}")
         return 1
 
     if not args.directory.is_dir():
-        console.print(f"[bold red]Error:[/] Not a directory: {args.directory}")
+        console.print(f"[bold red]Error:[/] Not a directory: {rich_escape(str(args.directory))}")
         return 1
 
-    console.print(f"[bold]Scanning:[/] [blue]{args.directory.resolve()}[/]")
+    # Handle --changes separately (git-specific analysis)
+    if args.changes:
+        return analyze_changes(args.directory.resolve(), args.since)
+
+    console.print(f"[bold]Scanning:[/] [blue]{rich_escape(str(args.directory.resolve()))}[/]")
 
     # Determine ignore settings
     ignore_dirs = set() if args.no_ignore else None
@@ -368,7 +587,7 @@ def main():
         if analyzer:
             # Save full analysis
             analyzer.save(args.output)
-            console.print(f"\n[bold green]✓[/] Graph saved to: [underline]{args.output}[/]")
+            console.print(f"\n[bold green]✓[/] Graph saved to: [underline]{rich_escape(str(args.output))}[/]")
         else:
             save_results(results, stats, args.output)
 

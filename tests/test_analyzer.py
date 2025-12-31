@@ -95,6 +95,9 @@ class TestAnalyzerMatching:
                 analyzer._entity_index[entity.name] = []
             analyzer._entity_index[entity.name].append(entity)
 
+        # Reinitialize components so matcher has updated trigram index
+        analyzer._init_components()
+
         return analyzer
 
     def test_exact_match(self):

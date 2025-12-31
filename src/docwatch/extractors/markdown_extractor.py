@@ -3,8 +3,38 @@ Extract structured information from Markdown files.
 """
 import re
 
+from docwatch.constants import (
+    DEFAULT_CODE_BLOCK_LANGUAGE,
+    JS_ALIASES,
+    JS_FILTER,
+    MIN_IDENTIFIER_LENGTH,
+    PYTHON_ALIASES,
+    PYTHON_COMMON_TYPES,
+    PYTHON_FILTER,
+)
+from docwatch.extractors.patterns import (
+    MARKDOWN_HEADER,
+    MARKDOWN_FENCED_CODE_BLOCK,
+    MARKDOWN_INLINE_CODE,
+    MARKDOWN_LINK,
+    CODE_PYTHON_IMPORT,
+    CODE_FUNCTION_CALL,
+    CODE_CLASS_NAME,
+    CODE_JS_DESTRUCTURE_IMPORT,
+    CODE_WORD,
+)
+from docwatch.models import CodeBlockInfo, HeaderInfo, LinkInfo
 
-def _get_code_block_lines(content):
+__all__ = [
+    "extract_headers",
+    "extract_code_blocks",
+    "extract_inline_code",
+    "extract_code_block_identifiers",
+    "extract_links",
+]
+
+
+def _get_code_block_lines(content: str) -> set[int]:
     """
     Get set of line numbers that are inside fenced code blocks.
     Used to filter out false positives (e.g., # comments in code).
@@ -16,9 +46,8 @@ def _get_code_block_lines(content):
         set: Line numbers that are inside code blocks
     """
     code_lines = set()
-    pattern = r'```(\w*)\n(.*?)\n```'
 
-    for match in re.finditer(pattern, content, re.DOTALL):
+    for match in MARKDOWN_FENCED_CODE_BLOCK.finditer(content):
         start_line = content[:match.start()].count('\n') + 1
         end_line = content[:match.end()].count('\n') + 1
 
@@ -29,7 +58,7 @@ def _get_code_block_lines(content):
     return code_lines
 
 
-def extract_headers(content):
+def extract_headers(content: str) -> list[HeaderInfo]:
     """
     Extract all markdown headers with their levels.
     Ignores headers inside fenced code blocks.
@@ -48,12 +77,7 @@ def extract_headers(content):
         if line_num in code_block_lines:
             continue
 
-        # Match lines starting with 1-6 '#' characters followed by space
-        # ^      - start of line
-        # (#{1,6}) - capture 1-6 hash symbols
-        # \s+    - one or more whitespace
-        # (.+)   - capture the header text
-        match = re.match(r'^(#{1,6})\s+(.+)$', line)
+        match = MARKDOWN_HEADER.match(line)
         if match:
             headers.append({
                 'level': len(match.group(1)),  # Count the #'s
@@ -64,7 +88,7 @@ def extract_headers(content):
     return headers
 
 
-def extract_code_blocks(content):
+def extract_code_blocks(content: str) -> list[CodeBlockInfo]:
     """
     Extract fenced code blocks with their language.
 
@@ -76,17 +100,7 @@ def extract_code_blocks(content):
     """
     blocks = []
 
-    # Pattern breakdown:
-    #   ```(\w*)   - opening fence with optional language (captured)
-    #   \n         - newline after opening fence
-    #   (.*?)      - code content (non-greedy, captured)
-    #   \n```      - closing fence
-    #
-    # Flags:
-    #   re.DOTALL  - makes '.' match newlines too (for multi-line code)
-    pattern = r'```(\w*)\n(.*?)\n```'
-
-    for match in re.finditer(pattern, content, re.DOTALL):
+    for match in MARKDOWN_FENCED_CODE_BLOCK.finditer(content):
         # Calculate line numbers from string positions
         start_pos = match.start()
         end_pos = match.end()
@@ -96,7 +110,7 @@ def extract_code_blocks(content):
         end_line = content[:end_pos].count('\n') + 1
 
         blocks.append({
-            'language': match.group(1) or 'text',  # Default to 'text' if no language
+            'language': match.group(1) or DEFAULT_CODE_BLOCK_LANGUAGE,
             'code': match.group(2),
             'start_line': start_line,
             'end_line': end_line
@@ -105,7 +119,7 @@ def extract_code_blocks(content):
     return blocks
 
 
-def extract_inline_code(content):
+def extract_inline_code(content: str) -> list[str]:
     """
     Extract inline code references (`like_this`).
     These often reference function/class names.
@@ -116,15 +130,7 @@ def extract_inline_code(content):
     Returns:
         list: Unique inline code strings found
     """
-    # Match text between single backticks (but not triple backticks)
-    # (?<!`)  - negative lookbehind: not preceded by backtick
-    # `       - opening backtick
-    # ([^`]+) - one or more non-backtick characters (captured)
-    # `       - closing backtick
-    # (?!`)   - negative lookahead: not followed by backtick
-    pattern = r'(?<!`)`([^`]+)`(?!`)'
-
-    matches = re.findall(pattern, content)
+    matches = MARKDOWN_INLINE_CODE.findall(content)
 
     # Return unique values, preserving first occurrence order
     seen = set()
@@ -137,7 +143,7 @@ def extract_inline_code(content):
     return unique
 
 
-def extract_code_block_identifiers(content):
+def extract_code_block_identifiers(content: str) -> list[str]:
     """
     Extract likely code identifiers from fenced code blocks.
 
@@ -161,7 +167,7 @@ def extract_code_block_identifiers(content):
         lang = block['language'].lower()
 
         # Python imports: from x import y, z  OR  import x
-        if lang in ('python', 'py', ''):
+        if lang in PYTHON_ALIASES:
             # from module import name1, name2
             from_imports = re.findall(
                 r'from\s+[\w.]+\s+import\s+([^#\n]+)',
@@ -169,46 +175,40 @@ def extract_code_block_identifiers(content):
             )
             for match in from_imports:
                 # Split by comma and clean up
-                names = re.findall(r'(\w+)', match)
+                names = CODE_WORD.findall(match)
                 identifiers.update(names)
 
             # import module  (get the module name)
-            direct_imports = re.findall(r'^import\s+([\w.]+)', code, re.MULTILINE)
+            direct_imports = CODE_PYTHON_IMPORT.findall(code)
             for match in direct_imports:
                 # Get the last part of dotted import
                 identifiers.add(match.split('.')[-1])
 
             # Function/method calls: name(  or name.method(
-            calls = re.findall(r'\b([A-Za-z_]\w*)\s*\(', code)
-            # Filter out common Python builtins/keywords
-            builtins = {'print', 'len', 'str', 'int', 'list', 'dict', 'set',
-                       'range', 'open', 'type', 'isinstance', 'if', 'for', 'while'}
-            identifiers.update(c for c in calls if c not in builtins)
+            calls = CODE_FUNCTION_CALL.findall(code)
+            identifiers.update(c for c in calls if c not in PYTHON_FILTER)
 
             # Class instantiation / type hints: ClassName or name: ClassName
-            classes = re.findall(r'\b([A-Z][A-Za-z0-9_]*)\b', code)
-            # Filter out common ones
-            common = {'True', 'False', 'None', 'Path', 'Optional', 'List', 'Dict', 'Set'}
-            identifiers.update(c for c in classes if c not in common)
+            classes = CODE_CLASS_NAME.findall(code)
+            identifiers.update(c for c in classes if c not in PYTHON_COMMON_TYPES)
 
         # JavaScript/TypeScript
-        elif lang in ('javascript', 'js', 'typescript', 'ts'):
+        elif lang in JS_ALIASES:
             # import { name } from 'module'
-            js_imports = re.findall(r'import\s*\{([^}]+)\}', code)
+            js_imports = CODE_JS_DESTRUCTURE_IMPORT.findall(code)
             for match in js_imports:
-                names = re.findall(r'(\w+)', match)
+                names = CODE_WORD.findall(match)
                 identifiers.update(names)
 
             # Function calls
-            calls = re.findall(r'\b([A-Za-z_]\w*)\s*\(', code)
-            builtins = {'console', 'log', 'require', 'async', 'await', 'function'}
-            identifiers.update(c for c in calls if c not in builtins)
+            calls = CODE_FUNCTION_CALL.findall(code)
+            identifiers.update(c for c in calls if c not in JS_FILTER)
 
     # Filter out very short identifiers (likely false positives)
-    return [i for i in identifiers if len(i) >= 3]
+    return [i for i in identifiers if len(i) >= MIN_IDENTIFIER_LENGTH]
 
 
-def extract_links(content):
+def extract_links(content: str) -> list[LinkInfo]:
     """
     Extract markdown links [text](url).
 
@@ -221,12 +221,7 @@ def extract_links(content):
     links = []
 
     for line_num, line in enumerate(content.splitlines(), start=1):
-        # Pattern: [text](url)
-        # \[([^\]]+)\]  - [text] - capture text between brackets
-        # \(([^)]+)\)   - (url) - capture url between parentheses
-        pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-
-        for match in re.finditer(pattern, line):
+        for match in MARKDOWN_LINK.finditer(line):
             links.append({
                 'text': match.group(1),
                 'url': match.group(2),

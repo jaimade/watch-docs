@@ -2,10 +2,21 @@
 Extract structured information from Python source code.
 """
 import ast
-import re
+import logging
+
+from docwatch.extractors.patterns import PYTHON_FUNCTION_DEF, PYTHON_CLASS_DEF
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "extract_function_names",
+    "extract_class_names",
+    "extract_docstrings",
+    "extract_imports",
+]
 
 
-def extract_function_names(content):
+def extract_function_names(content: str) -> list[str]:
     """
     Extract all function names from Python code.
 
@@ -19,18 +30,10 @@ def extract_function_names(content):
         >>> extract_function_names("def hello(): pass")
         ['hello']
     """
-    # Pattern breakdown:
-    #   \b       - word boundary (ensures we match 'def' as a keyword)
-    #   def      - literal 'def' keyword
-    #   \s+      - one or more whitespace characters
-    #   (\w+)    - capture group: one or more word characters (the function name)
-    #   \s*      - zero or more whitespace
-    #   \(       - literal opening parenthesis
-    pattern = r'\bdef\s+(\w+)\s*\('
-    return re.findall(pattern, content)
+    return PYTHON_FUNCTION_DEF.findall(content)
 
 
-def extract_class_names(content):
+def extract_class_names(content: str) -> list[str]:
     """
     Extract all class names from Python code.
 
@@ -46,17 +49,10 @@ def extract_class_names(content):
         >>> extract_class_names("class Child(Parent): pass")
         ['Child']
     """
-    # Pattern breakdown:
-    #   \b       - word boundary (prevents matching 'class' inside 'dataclass')
-    #   class    - literal 'class' keyword
-    #   \s+      - one or more whitespace
-    #   (\w+)    - capture group: the class name
-    #   [\s(:]   - followed by whitespace, '(' or ':' (handles all cases)
-    pattern = r'\bclass\s+(\w+)[\s(:]'
-    return re.findall(pattern, content)
+    return PYTHON_CLASS_DEF.findall(content)
 
 
-def extract_docstrings(content):
+def extract_docstrings(content: str) -> dict[str, str]:
     """
     Extract function and class docstrings from Python code.
 
@@ -73,10 +69,11 @@ def extract_docstrings(content):
     """
     try:
         tree = ast.parse(content)
-    except SyntaxError:
+    except SyntaxError as e:
+        logger.debug("Failed to parse Python source for docstrings: %s at line %s", e.msg, e.lineno)
         return {}
 
-    docstrings = {}
+    docstrings: dict[str, str] = {}
 
     for node in ast.walk(tree):
         # Check for functions and classes
@@ -90,7 +87,7 @@ def extract_docstrings(content):
     return docstrings
 
 
-def extract_imports(content):
+def extract_imports(content: str) -> list[str]:
     """
     Extract all import statements from Python code.
 
@@ -106,10 +103,11 @@ def extract_imports(content):
     """
     try:
         tree = ast.parse(content)
-    except SyntaxError:
+    except SyntaxError as e:
+        logger.debug("Failed to parse Python source for imports: %s at line %s", e.msg, e.lineno)
         return []
 
-    imports = []
+    imports: list[str] = []
 
     for node in ast.walk(tree):
         # import x, y, z
@@ -123,8 +121,8 @@ def extract_imports(content):
                 imports.append(node.module.split('.')[0])
 
     # Return unique imports, preserving order
-    seen = set()
-    unique = []
+    seen: set[str] = set()
+    unique: list[str] = []
     for imp in imports:
         if imp not in seen:
             seen.add(imp)

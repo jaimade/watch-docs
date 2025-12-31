@@ -1,10 +1,24 @@
 """
 Extract structured information from reStructuredText (RST) files.
 """
-import re
+from docwatch.constants import DEFAULT_CODE_BLOCK_LANGUAGE, RST_UNDERLINE_CHARS
+from docwatch.extractors.patterns import (
+    RST_CODE_BLOCK_DIRECTIVE,
+    RST_INLINE_CODE,
+    RST_INLINE_LINK,
+    RST_REFERENCE_DEF,
+)
+from docwatch.models import CodeBlockInfo, HeaderInfo, LinkInfo
+
+__all__ = [
+    "extract_headers",
+    "extract_code_blocks",
+    "extract_inline_code",
+    "extract_links",
+]
 
 
-def extract_headers(content):
+def extract_headers(content: str) -> list[HeaderInfo]:
     """
     Extract RST headers with their levels.
 
@@ -22,7 +36,6 @@ def extract_headers(content):
 
     # RST uses underline characters to define headers
     # The first style encountered becomes level 1, second becomes level 2, etc.
-    underline_chars = '=-~^"\'+:._#*'
     seen_styles = []  # Track order of underline styles
 
     for i, line in enumerate(lines):
@@ -34,7 +47,7 @@ def extract_headers(content):
             if (len(next_line) >= len(line.rstrip()) and
                 len(line.strip()) > 0 and
                 len(next_line) > 0 and
-                next_line[0] in underline_chars and
+                next_line[0] in RST_UNDERLINE_CHARS and
                 all(c == next_line[0] for c in next_line.rstrip())):
 
                 underline_char = next_line[0]
@@ -54,7 +67,7 @@ def extract_headers(content):
     return headers
 
 
-def extract_code_blocks(content):
+def extract_code_blocks(content: str) -> list[CodeBlockInfo]:
     """
     Extract code blocks from RST.
 
@@ -76,9 +89,9 @@ def extract_code_blocks(content):
         line = lines[i]
 
         # Check for .. code-block:: directive
-        match = re.match(r'\.\.\s+code-block::\s*(\w*)', line)
+        match = RST_CODE_BLOCK_DIRECTIVE.match(line)
         if match:
-            language = match.group(1) or 'text'
+            language = match.group(1) or DEFAULT_CODE_BLOCK_LANGUAGE
             start_line = i + 1
 
             # Skip blank lines and options
@@ -124,7 +137,7 @@ def extract_code_blocks(content):
 
             if code_lines:
                 blocks.append({
-                    'language': 'text',  # Literal blocks don't specify language
+                    'language': DEFAULT_CODE_BLOCK_LANGUAGE,
                     'code': '\n'.join(code_lines).strip(),
                     'start_line': start_line,
                     'end_line': i
@@ -136,7 +149,7 @@ def extract_code_blocks(content):
     return blocks
 
 
-def extract_inline_code(content):
+def extract_inline_code(content: str) -> list[str]:
     """
     Extract inline code references from RST.
     RST uses double backticks: ``code``
@@ -147,9 +160,7 @@ def extract_inline_code(content):
     Returns:
         list: Unique inline code strings found
     """
-    # Match text between double backticks
-    pattern = r'``([^`]+)``'
-    matches = re.findall(pattern, content)
+    matches = RST_INLINE_CODE.findall(content)
 
     # Return unique values
     seen = set()
@@ -162,7 +173,7 @@ def extract_inline_code(content):
     return unique
 
 
-def extract_links(content):
+def extract_links(content: str) -> list[LinkInfo]:
     """
     Extract links from RST.
 
@@ -180,8 +191,7 @@ def extract_links(content):
 
     for line_num, line in enumerate(content.splitlines(), start=1):
         # Inline links: `text <url>`_
-        pattern = r'`([^<]+)\s+<([^>]+)>`_'
-        for match in re.finditer(pattern, line):
+        for match in RST_INLINE_LINK.finditer(line):
             links.append({
                 'text': match.group(1).strip(),
                 'url': match.group(2),
@@ -190,7 +200,7 @@ def extract_links(content):
 
     # Also collect reference definitions: .. _name: url
     for line_num, line in enumerate(content.splitlines(), start=1):
-        match = re.match(r'\.\.\s+_([^:]+):\s+(.+)', line)
+        match = RST_REFERENCE_DEF.match(line)
         if match:
             links.append({
                 'text': match.group(1).strip(),

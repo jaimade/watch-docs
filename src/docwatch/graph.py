@@ -4,11 +4,31 @@ Graph structure for code-documentation relationships.
 Uses networkx as the single source of truth for all relationships.
 The graph is purely structural - analysis logic is in analyzer.py.
 """
+from pathlib import Path
 from typing import Iterator, Optional
 
 import networkx as nx
 
 from docwatch.models import CodeEntity, DocReference, CodeFile, DocFile, CodeDocLink
+
+
+# Node ID delimiter - pipe is invalid in file paths on Windows/Unix
+_ID_DELIM = "|"
+
+
+def _file_node_id(path: Path | str) -> str:
+    """Generate a unique node ID for a file."""
+    return f"file{_ID_DELIM}{path}"
+
+
+def _entity_node_id(qualified_name: str) -> str:
+    """Generate a unique node ID for a code entity."""
+    return f"entity{_ID_DELIM}{qualified_name}"
+
+
+def _reference_node_id(file: Path | str, line: int, text: str) -> str:
+    """Generate a unique node ID for a documentation reference."""
+    return f"ref{_ID_DELIM}{file}{_ID_DELIM}{line}{_ID_DELIM}{text}"
 
 
 class DocumentationGraph:
@@ -33,7 +53,7 @@ class DocumentationGraph:
 
     def add_code_file(self, code_file: CodeFile) -> str:
         """Add a code file and its entities. Returns node ID."""
-        file_id = f"file:{code_file.path}"
+        file_id = _file_node_id(code_file.path)
         self._graph.add_node(
             file_id,
             kind="code_file",
@@ -49,7 +69,7 @@ class DocumentationGraph:
 
     def add_doc_file(self, doc_file: DocFile) -> str:
         """Add a doc file and its references. Returns node ID."""
-        file_id = f"file:{doc_file.path}"
+        file_id = _file_node_id(doc_file.path)
         self._graph.add_node(
             file_id,
             kind="doc_file",
@@ -66,7 +86,7 @@ class DocumentationGraph:
 
     def add_entity(self, entity: CodeEntity) -> str:
         """Add a code entity. Returns node ID."""
-        entity_id = f"entity:{entity.qualified_name}"
+        entity_id = _entity_node_id(entity.qualified_name)
         self._graph.add_node(
             entity_id,
             kind="entity",
@@ -79,7 +99,11 @@ class DocumentationGraph:
 
     def add_reference(self, ref: DocReference) -> str:
         """Add a documentation reference. Returns node ID."""
-        ref_id = f"ref:{ref.location.file}:{ref.location.line_start}:{ref.clean_text}"
+        ref_id = _reference_node_id(
+            ref.location.file,
+            ref.location.line_start,
+            ref.clean_text,
+        )
         self._graph.add_node(
             ref_id,
             kind="reference",
@@ -92,8 +116,12 @@ class DocumentationGraph:
 
     def add_link(self, link: CodeDocLink) -> None:
         """Add a documentation link (entity -> reference edge)."""
-        entity_id = f"entity:{link.entity.qualified_name}"
-        ref_id = f"ref:{link.reference.location.file}:{link.reference.location.line_start}:{link.reference.clean_text}"
+        entity_id = _entity_node_id(link.entity.qualified_name)
+        ref_id = _reference_node_id(
+            link.reference.location.file,
+            link.reference.location.line_start,
+            link.reference.clean_text,
+        )
 
         if entity_id in self._graph and ref_id in self._graph:
             self._graph.add_edge(
@@ -130,6 +158,23 @@ class DocumentationGraph:
             return dict(self._graph.nodes[ref_id])
         return None
 
+    def find_entity_by_qualified_name(self, qualified_name: str) -> Optional[str]:
+        """
+        Find an entity node ID by its qualified name.
+
+        Args:
+            qualified_name: Full module.name identifier (e.g., "mypackage.module.func")
+
+        Returns:
+            Entity node ID if found, None otherwise
+        """
+        entity_id = _entity_node_id(qualified_name)
+        if entity_id in self._graph:
+            data = self._graph.nodes[entity_id]
+            if data.get("kind") == "entity":
+                return entity_id
+        return None
+
     def get_documenting_refs(self, entity_id: str) -> list[str]:
         """Get all reference IDs that document an entity."""
         refs = []
@@ -152,6 +197,38 @@ class DocumentationGraph:
     def is_reference_linked(self, ref_id: str) -> bool:
         """Check if a reference is linked to any entity."""
         return self.get_documented_entity(ref_id) is not None
+
+    # --- Cluster Analysis ---
+
+    def get_connected_file_clusters(self) -> list[list[str]]:
+        """
+        Find groups of related code and documentation files.
+
+        Uses graph connectivity to identify which files are connected
+        through shared entities and references.
+
+        Returns:
+            List of clusters, where each cluster is a list of file paths.
+            Sorted by cluster size (largest first).
+        """
+        # Convert to undirected for component analysis
+        undirected = self._graph.to_undirected()
+
+        # Find connected components
+        clusters = []
+        for component in nx.connected_components(undirected):
+            # Extract just the file nodes (not entities/references)
+            files = [
+                node.split(_ID_DELIM, 1)[1]  # Remove "file|" prefix
+                for node in component
+                if node.startswith(f"file{_ID_DELIM}")
+            ]
+            if files:
+                clusters.append(sorted(files))
+
+        # Sort clusters by size (largest first)
+        clusters.sort(key=len, reverse=True)
+        return clusters
 
     # --- Stats ---
 

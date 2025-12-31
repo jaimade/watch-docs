@@ -3,8 +3,11 @@ Extraction pipeline for parsing code and documentation files.
 
 This module converts raw files into structured models (CodeFile, DocFile).
 """
+import logging
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from docwatch.models import (
     Language, DocFormat, EntityType, ReferenceType,
@@ -12,7 +15,7 @@ from docwatch.models import (
 )
 from docwatch.readers import read_file_safe
 from docwatch.scanner import categorize_files
-from docwatch.extractors import python_extractor, js_extractor
+from docwatch.extractors import python_ast, js_extractor, notebook_extractor
 from docwatch.extractors import markdown_extractor, rst_extractor, asciidoc_extractor
 
 
@@ -21,37 +24,55 @@ def extract_code_file(filepath: Path) -> Optional[CodeFile]:
     Parse a code file and extract all entities.
 
     Args:
-        filepath: Path to the code file
+        filepath: Path to the code file (including .ipynb notebooks)
 
     Returns:
         CodeFile with entities, or None if unreadable
     """
+    # Handle Jupyter notebooks specially (they're JSON, not plain text)
+    if filepath.suffix.lower() == '.ipynb':
+        return _extract_notebook(filepath)
+
     content = read_file_safe(filepath)
     if content is None:
+        logger.warning("Failed to read code file: %s", filepath)
         return None
 
     language = Language.from_extension(filepath.suffix)
 
-    # Select extractor based on language
+    # Python: Use AST-based extraction for accuracy
     if language == Language.PYTHON:
-        extractor = python_extractor
-    elif language in (Language.JAVASCRIPT, Language.TYPESCRIPT):
-        extractor = js_extractor
-    else:
-        # No extractor available, return file with no entities
-        return CodeFile(path=filepath, language=language)
+        entities, imports = python_ast.extract_from_source(content, filepath)
+        return CodeFile(
+            path=filepath,
+            language=language,
+            entities=entities,
+            imports=imports,
+        )
 
-    # Extract raw data
-    function_names = extractor.extract_function_names(content)
-    class_names = extractor.extract_class_names(content)
-    imports = extractor.extract_imports(content)
+    # JavaScript/TypeScript: Use regex extraction
+    if language in (Language.JAVASCRIPT, Language.TYPESCRIPT):
+        return _extract_js_code_file(filepath, content, language)
 
-    # Build entities with locations
+    # No extractor available, return file with no entities
+    return CodeFile(path=filepath, language=language)
+
+
+def _extract_js_code_file(
+    filepath: Path,
+    content: str,
+    language: Language
+) -> CodeFile:
+    """Extract entities from JavaScript/TypeScript files using regex."""
+    function_names = js_extractor.extract_function_names(content)
+    class_names = js_extractor.extract_class_names(content)
+    imports = js_extractor.extract_imports(content)
+
     entities = []
     lines = content.splitlines()
 
     for name in function_names:
-        line_num = _find_definition_line(lines, name, "def" if language == Language.PYTHON else "function")
+        line_num = _find_definition_line(lines, name, "function")
         if line_num:
             entities.append(CodeEntity(
                 name=name,
@@ -76,6 +97,18 @@ def extract_code_file(filepath: Path) -> Optional[CodeFile]:
     )
 
 
+def _extract_notebook(filepath: Path) -> Optional[CodeFile]:
+    """Extract entities from a Jupyter notebook."""
+    entities, imports = notebook_extractor.extract_from_notebook(filepath)
+
+    return CodeFile(
+        path=filepath,
+        language=Language.PYTHON,  # Notebooks are Python
+        entities=entities,
+        imports=imports,
+    )
+
+
 def extract_doc_file(filepath: Path) -> Optional[DocFile]:
     """
     Parse a documentation file and extract all references.
@@ -88,6 +121,7 @@ def extract_doc_file(filepath: Path) -> Optional[DocFile]:
     """
     content = read_file_safe(filepath)
     if content is None:
+        logger.warning("Failed to read doc file: %s", filepath)
         return None
 
     doc_format = DocFormat.from_extension(filepath.suffix)

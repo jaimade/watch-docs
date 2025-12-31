@@ -1,10 +1,26 @@
 """
 Extract structured information from AsciiDoc files.
 """
-import re
+from docwatch.constants import DEFAULT_CODE_BLOCK_LANGUAGE
+from docwatch.extractors.patterns import (
+    ASCIIDOC_HEADER,
+    ASCIIDOC_SOURCE_BLOCK,
+    ASCIIDOC_INLINE_CODE_BACKTICK,
+    ASCIIDOC_INLINE_CODE_PLUS,
+    ASCIIDOC_LINK,
+    ASCIIDOC_URL_LINK,
+)
+from docwatch.models import CodeBlockInfo, HeaderInfo, LinkInfo
+
+__all__ = [
+    "extract_headers",
+    "extract_code_blocks",
+    "extract_inline_code",
+    "extract_links",
+]
 
 
-def extract_headers(content):
+def extract_headers(content: str) -> list[HeaderInfo]:
     """
     Extract AsciiDoc headers with their levels.
 
@@ -22,8 +38,7 @@ def extract_headers(content):
     headers = []
 
     for line_num, line in enumerate(content.splitlines(), start=1):
-        # Match lines starting with 1-6 '=' characters followed by space
-        match = re.match(r'^(={1,6})\s+(.+)$', line)
+        match = ASCIIDOC_HEADER.match(line)
         if match:
             headers.append({
                 'level': len(match.group(1)),
@@ -34,7 +49,7 @@ def extract_headers(content):
     return headers
 
 
-def extract_code_blocks(content):
+def extract_code_blocks(content: str) -> list[CodeBlockInfo]:
     """
     Extract code blocks from AsciiDoc.
 
@@ -56,10 +71,10 @@ def extract_code_blocks(content):
         line = lines[i]
 
         # Check for [source,language] attribute
-        language = 'text'
-        source_match = re.match(r'\[source,?\s*(\w*)\]', line)
+        language = DEFAULT_CODE_BLOCK_LANGUAGE
+        source_match = ASCIIDOC_SOURCE_BLOCK.match(line)
         if source_match:
-            language = source_match.group(1) or 'text'
+            language = source_match.group(1) or DEFAULT_CODE_BLOCK_LANGUAGE
             i += 1
             if i >= len(lines):
                 break
@@ -89,7 +104,7 @@ def extract_code_blocks(content):
     return blocks
 
 
-def extract_inline_code(content):
+def extract_inline_code(content: str) -> list[str]:
     """
     Extract inline code references from AsciiDoc.
     AsciiDoc uses backticks or + for inline code: `code` or +code+
@@ -103,10 +118,10 @@ def extract_inline_code(content):
     matches = []
 
     # Backtick style: `code`
-    matches.extend(re.findall(r'`([^`]+)`', content))
+    matches.extend(ASCIIDOC_INLINE_CODE_BACKTICK.findall(content))
 
     # Plus style: +code+ (less common)
-    matches.extend(re.findall(r'\+([^+]+)\+', content))
+    matches.extend(ASCIIDOC_INLINE_CODE_PLUS.findall(content))
 
     # Return unique values
     seen = set()
@@ -119,7 +134,7 @@ def extract_inline_code(content):
     return unique
 
 
-def extract_links(content):
+def extract_links(content: str) -> list[LinkInfo]:
     """
     Extract links from AsciiDoc.
 
@@ -138,7 +153,7 @@ def extract_links(content):
 
     for line_num, line in enumerate(content.splitlines(), start=1):
         # link:url[text] format
-        for match in re.finditer(r'link:([^\[]+)\[([^\]]*)\]', line):
+        for match in ASCIIDOC_LINK.finditer(line):
             links.append({
                 'text': match.group(2) or match.group(1),
                 'url': match.group(1),
@@ -146,8 +161,7 @@ def extract_links(content):
             })
 
         # http(s)://url[text] format (but not when preceded by 'link:')
-        # (?<!link:) is a negative lookbehind - only match if NOT preceded by 'link:'
-        for match in re.finditer(r'(?<!link:)(https?://[^\[]+)\[([^\]]*)\]', line):
+        for match in ASCIIDOC_URL_LINK.finditer(line):
             links.append({
                 'text': match.group(2) or match.group(1),
                 'url': match.group(1),
