@@ -234,10 +234,12 @@ class DocumentationGraph:
 
     @property
     def node_count(self) -> int:
+        """Total number of nodes in the graph."""
         return self._graph.number_of_nodes()
 
     @property
     def edge_count(self) -> int:
+        """Total number of edges in the graph."""
         return self._graph.number_of_edges()
 
     def count_by_kind(self, kind: str) -> int:

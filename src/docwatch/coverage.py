@@ -19,14 +19,17 @@ class CoverageStats:
 
     @property
     def undocumented_entities(self) -> int:
+        """Number of code entities without documentation."""
         return self.total_entities - self.documented_entities
 
     @property
     def broken_references(self) -> int:
+        """Number of documentation references that don't match any code."""
         return self.total_references - self.linked_references
 
     @property
     def coverage_percent(self) -> float:
+        """Documentation coverage as a percentage (0.0 to 100.0)."""
         if self.total_entities == 0:
             return 0.0
         return (self.documented_entities / self.total_entities) * 100
