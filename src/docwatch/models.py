@@ -311,7 +311,12 @@ class CodeDocLink:
     entity: CodeEntity
     reference: DocReference
     link_type: LinkType
-    confidence: float
+    confidence: float  # 0.0 to 1.0
+
+    def __post_init__(self) -> None:
+        """Validate field constraints."""
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"confidence must be 0.0-1.0, got {self.confidence}")
 
     def __str__(self) -> str:
         return f"{self.entity.name} <- {self.reference.clean_text} [{self.link_type.value}, {self.confidence:.0%}]"
